@@ -1,0 +1,42 @@
+name: Weekly Psych Sheet Notifier
+
+on:
+  schedule:
+    # Wednesdays at 00:00 UTC
+    - cron: "0 0 * * 3"
+  workflow_dispatch:  # Allow manual trigger from Actions tab
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Create watch list
+        env:
+          WATCH_LIST: ${{ secrets.WATCH_LIST }}
+        run: printf '%s' "$WATCH_LIST" > watch_list.json
+
+      - name: Run notifier
+        run: |
+          uv run python psych_sheet_notifier.py \
+            -w watch_list.json \
+            -e "$NOTIFY_EMAIL" \
+            --smtp-user "$SMTP_USER" \
+            --smtp-password "$SMTP_PASSWORD" \
+            --rate-limit-delay 1.5
+        env:
+          NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
