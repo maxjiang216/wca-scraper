@@ -1,183 +1,150 @@
-# WCA Psych Sheet Notifier
+# WCA tools
 
-Email notifications when watched competitors are registered for upcoming WCA competitions.
+Utilities for the [World Cube Association](https://www.worldcubeassociation.org/) public API: email when competitors on **your watch list** register for upcoming comps, plus a **report** that highlights highly world-ranked registrants across upcoming competitions.
 
-## Project structure
+## Project layout
 
 ```
 src/wca-org/
-├── wca_api.py         # WCA v0 API client (competitions, WCIF)
-├── notify.py          # Email formatting and sending
-└── psych_sheet_notifier.py
+├── wca_api.py              # Competitions listing, WCIF, ranking helpers
+├── notify.py               # Email formatting and SMTP
+├── psych_sheet_notifier.py # Watch-list notifier (shared argument parser)
+├── top_competitors_report.py # World-ranked registrants report
+├── cli.py                  # ``wca notify`` / ``wca report``
+└── __main__.py             # ``python -m wca_org``
 ```
 
-## How it works
+No scraping and no authentication: uses the documented WCA v0 endpoints.
 
-Scrapes the WCA website via its public API to get psych sheets for upcoming competitions. Runs weekly and sends an email when any **watched competitors** (by WCA ID) are registered and competing.
+---
 
-1. **Fetch upcoming competitions** from the [WCA v0 API](https://www.worldcubeassociation.org/api/v0/competitions)
-2. **Get psych sheet (WCIF)** for each competition from `/api/v0/competitions/{id}/wcif/public`
-3. **Check watch list** – for each competitor on your list (by WCA ID per event), if they’re competing in that event at a competition, add it to the notification
-4. **Send email** when any watched competitors are found
+## CLI
 
-No scraping and no auth: the WCA public API is used as intended.
+Prefer the unified launcher (after [`uv sync`](https://docs.astral.sh/uv/)):
 
-## Setup
+```bash
+uv run wca notify --help
+uv run wca report --help
+```
 
-Using [uv](https://docs.astral.sh/uv/) (recommended):
+Equivalent: `python -m wca_org notify …`, `python -m wca_org report …`.
+
+**Compatibility:** the repo-root `psych_sheet_notifier.py` still exposes the notifier with the **same flags** as `wca notify` (no `notify` keyword).
+
+---
+
+### `wca notify` — watch-list email
+
+Runs weekly via GitHub Actions (or cron) when any **watched competitor** is accepted and competing in an event present in your [`watch_list.json`](watch_list.example.json).
+
+1. List upcoming competitions (`GET …/competitions`, paginated).
+2. For each competition, load WCIF (`…/wcif/public`).
+3. Match WCA IDs in your JSON (per-event keys like `333`, `444`).
+4. Send HTML email with schedules when matched.
+
+Setup:
 
 ```bash
 uv sync
 cp watch_list.example.json watch_list.json
-# Edit watch_list.json with WCA IDs per event
+# Edit IDs per event id
 ```
-
-Or with pip:
-
-```bash
-pip install -e .
-cp watch_list.example.json watch_list.json
-```
-
-### Watch list (watch_list.json)
-
-WCA IDs to watch per event:
-
-```json
-{
-  "333": ["2010LEAR01", "2017PARK03"],
-  "444": ["2010LEAR01"],
-  "333oh": ["2017PARK03"]
-}
-```
-
-If a competitor on the list is registered and competing in that event at an upcoming competition, you get notified.
-
-### CLI flags
 
 | Flag | Description |
 |------|-------------|
-| `-w, --watch-list` | Path to watch_list.json (default: watch_list.json) |
-| `-e, --email` | Email to receive notifications |
-| `-s, --start` | Start date (YYYY-MM-DD). Default: today |
-| `--end` | End date (YYYY-MM-DD). Omit to use start + --weeks (default 2 weeks). |
-| `-c, --country` | Filter by country ISO2 (e.g. US) or comma-separated list |
-| `--weeks` | How many weeks ahead to fetch (default: 2). Used when --end not specified. |
-| `--rate-limit-delay` | Seconds between WCIF API requests (default: 1.0). Increase if hitting 429. |
-| `-z, --timezone` | Timezone for schedule times (default: America/Los_Angeles = PST). IANA name. |
-| `--dry-run` | Print what would be sent, do not email |
-| `--smtp-host`, `--smtp-port`, `--smtp-user`, `--smtp-password` | SMTP settings |
+| `-w/--watch-list` | Path (default `./watch_list.json`) |
+| `-e/--email` | Recipient *(required unless `--dry-run`)* |
+| `-s/--start` | Start date YYYY-MM-DD (default today) |
+| `--end` | End date for listing; if omitted → `start + --weeks` |
+| `-c/--country` | ISO2 or comma-separated list |
+| `--weeks` | When `--end` omitted, window length (default 2 weeks) |
+| `--rate-limit-delay` | Delay before each WCIF request (seconds) |
+| `-z/--timezone` | Schedule display timezone |
+| `--dry-run` | Log + write `wca_notify_dry_run.txt` |
+| SMTP flags | `--smtp-host`, `--smtp-port`, `--smtp-user`, `--smtp-password` |
 
-### Gmail Setup
+Gmail uses an [App Password](https://support.google.com/accounts/answer/185833).
 
-For Gmail, use an [App Password](https://support.google.com/accounts/answer/185833), not your regular password:
+---
 
-1. Enable 2FA on your Google account  
-2. Create an App Password for "Mail"  
-3. Pass it via `--smtp-user` and `--smtp-password`
+### `wca report` — top-ranked registrants
 
-## Usage
+Builds Markdown (or plain text) listing accepted **competing** registrants whose **single** PB world rank (fallback: **average** if singles unranked) is **`≤ --max-rank`** in events they entered.
 
-```bash
-# Dry run (no email)
-uv run python psych_sheet_notifier.py -w watch_list.json --dry-run
-
-# Send email
-uv run python psych_sheet_notifier.py -w watch_list.json -e you@example.com --smtp-user ... --smtp-password ...
-
-# Date range: next 6 weeks (or use --end for explicit range)
-uv run python psych_sheet_notifier.py -w watch_list.json -e you@example.com --weeks 6
-
-# Rate limiting: if you hit 429 errors, increase delay between API requests
-uv run python psych_sheet_notifier.py -w watch_list.json --dry-run --rate-limit-delay 1.5
-
-# Custom weeks ahead (default 2)
-uv run python psych_sheet_notifier.py -w watch_list.json --dry-run --weeks 6
-
-# Full help
-uv run python psych_sheet_notifier.py --help
-```
-
-## GitHub Actions (Weekly on Tuesdays)
-
-1. **Push the repo to GitHub** (or create a new repo and push).
-
-2. **Add repository secrets** (Settings → Secrets and variables → Actions):
-   - `WATCH_LIST` — Your watch list as a single-line JSON string, e.g.  
-     `{"333":["2010LEAR01"],"444":["2010LEAR01"]}`
-   - `NOTIFY_EMAIL` — Email address to receive notifications
-   - `SMTP_USER` — SMTP username (e.g. your Gmail address)
-   - `SMTP_PASSWORD` — SMTP password (Gmail: use an [App Password](https://support.google.com/accounts/answer/185833))
-
-3. **Run**: The workflow in `.github/workflows/weekly-notify.yml` runs every **Wednesday at 00:00 UTC**. You can also trigger it manually from the Actions tab.
-
-**Optional:** For non-Gmail SMTP, add `SMTP_HOST` and `SMTP_PORT` secrets and update the workflow's `Run notifier` step to pass `--smtp-host` and `--smtp-port`.
-
-## Weekly Schedule (Local)
-
-### Cron (Linux/macOS)
+- By default **`--start` is today** in `--timezone` and **`--end` is omitted** so the competitions API returns **every upcoming listing** until pagination ends (respect WCA limits; jobs can take a long time and may hit HTTP 429).
+- **`--max-competitions N`**: scans only the first *N* competitions by start date. When `--country` does **not** contain a comma (single-country filter), paging stops early instead of prefetching everything.
+- **`--end`**: bounded window for quicker runs.
 
 ```bash
-crontab -e
+# Short dry-style run (single soonest upcoming comp)
+uv run wca report --max-competitions 3 --rate-limit-delay 1.0
+
+# Full open-ended crawl (omit --end — may run for a very long time)
+uv run wca report --max-rank 50 -o report.md
+
+# Bounded date range + US only (API-filtered → early paging still applies with --max-competitions)
+uv run wca report -c US --end 2030-12-31 -o us.md
+
+# Plain text
+uv run wca report --format plain --max-competitions 5
 ```
 
-Add a line to run every Sunday at 9am:
+WCIF shapes are documented briefly under **API Reference** below.
+
+---
+
+## GitHub Actions (weekly notifier)
+
+Workflow: [`.github/workflows/weekly-notify.yml`](.github/workflows/weekly-notify.yml).
+
+- Schedule: **Wednesday 00:00 UTC** (`cron`), plus manual dispatch.
+- Step runs `uv run wca notify …` with secrets: `WATCH_LIST`, `NOTIFY_EMAIL`, `SMTP_USER`, `SMTP_PASSWORD`.
+
+For non-Gmail SMTP, extend the step with `--smtp-host` / `--smtp-port`.
+
+**Optional CI report:** duplicate the workflow pattern with `uv run wca report --max-competitions … --end …` and upload `-o report.md` as an artifact—GitHub Actions has a finite job lifetime, so bounded flags are prudent.
+
+---
+
+## Local scheduling
+
+### Cron (example)
 
 ```
-0 9 * * 0 cd /path/to/wca_scraper && uv run python psych_sheet_notifier.py -w watch_list.json -e you@example.com >> /tmp/wca-notifier.log 2>&1
+0 9 * * 0 cd /path/to/wca_scraper && uv run wca notify -w watch_list.json -e you@example.com >> /tmp/wca-notifier.log 2>&1
 ```
 
-### systemd timer (Linux)
+### systemd
 
-```ini
-# ~/.config/systemd/user/wca-psych-sheet.service
-[Unit]
-Description=WCA Psych Sheet Watched Competitor Notifier
+Point `ExecStart` at `/usr/bin/uv run wca notify -w …` (same argv as notifier).
 
-[Service]
-Type=oneshot
-WorkingDirectory=/path/to/wca_scraper
-ExecStart=/usr/bin/uv run python psych_sheet_notifier.py -w watch_list.json -e you@example.com
-```
+---
 
-```ini
-# ~/.config/systemd/user/wca-psych-sheet.timer
-[Unit]
-Description=Run WCA Psych Sheet Notifier weekly
+## Where to host
 
-[Timer]
-OnCalendar=Sun *-*-* 09:00:00
-Persistent=true
+This repo is intentionally **standalone**: run locally, on a small VPS, or from **GitHub Actions** without AWS.
 
-[Install]
-WantedBy=timers.target
-```
+- **Lambda** fits poorly unless you rework into short steps (large scans exceed typical limits).
+- **Batch/Fargate/EC2** is optional if policies require AWS; not needed for hobby use.
 
-```bash
-systemctl --user enable --now wca-psych-sheet.timer
-```
+---
 
-## API Reference (WCA)
+## API reference (WCA)
 
-- **Competitions**: `GET https://www.worldcubeassociation.org/api/v0/competitions?start=YYYY-MM-DD&end=YYYY-MM-DD`
-- **WCIF (psych sheet)**: `GET https://www.worldcubeassociation.org/api/v0/competitions/{id}/wcif/public`
+- **Comp**: `GET https://www.worldcubeassociation.org/api/v0/competitions?start=&end=&country_iso2=&sort=start_date`
+- **WCIF:** `GET https://www.worldcubeassociation.org/api/v0/competitions/{id}/wcif/public`
 
-WCIF includes:
-- `persons` – each with `registration` (status, eventIds) and `personalBests` (worldRanking per event)
+WCIF persons include:
 
-## Example output
+- `registration.status`, `registration.isCompeting`, `registration.eventIds`
+- `personalBests[]` → `eventId`, `type` (`single` / `average`), `worldRanking`
 
-When watched competitors are found:
+---
 
-```
-Subject: WCA: 2 competition(s) with watched competitors
+## Hosting / ops recap
 
-Watched Competitors — Upcoming Competitions
-
-Week of Feb 12, 2026 (Wed Feb 12 – Tue Feb 18)
-• Max Park — UCLA Spring 2026 (US) (2026-02-15): 4x4
-• Yiheng Wang — Singapore Championship 2026 (SG) (2026-02-20 – 2026-02-22): 3x3, 4x4
-
-Week of Feb 19, 2026 (Wed Feb 19 – Tue Feb 25)
-• ...
-```
+| Where | Fits |
+|-------|------|
+| GitHub Actions | Scheduled notifier; bounded `report` with `--max-competitions`/`--end` |
+| Laptop / VPS / cron | Unlimited-length `report` runs |
+| AWS | Rarely justified unless mandated; Lambda not ideal for exhaustive scans |
