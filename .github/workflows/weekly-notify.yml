@@ -1,14 +1,15 @@
-name: Weekly Psych Sheet Notifier
+name: Weekly psych sheet
 
 on:
   schedule:
-    # Wednesdays at 00:00 UTC
-    - cron: "0 0 * * 3"
-  workflow_dispatch:  # Allow manual trigger from Actions tab
+    # Thursday 15:00 UTC — morning Pacific (see daily-records.yml).
+    - cron: "0 15 * * 4"
+  workflow_dispatch:
 
 jobs:
-  notify:
+  weekly:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -26,16 +27,17 @@ jobs:
       - name: Create watch list
         env:
           WATCH_LIST: ${{ secrets.WATCH_LIST }}
-        run: printf '%s' "$WATCH_LIST" > watch_list.json
+        run: printf '%s' "$WATCH_LIST" > watch_list.yaml
 
-      - name: Run notifier
+      - name: Run weekly psych sheet
         run: |
-          uv run wca notify \
-            -w watch_list.json \
+          uv run wca weekly \
+            -w watch_list.yaml \
             -e "$NOTIFY_EMAIL" \
             --smtp-user "$SMTP_USER" \
             --smtp-password "$SMTP_PASSWORD" \
-            --rate-limit-delay 1.5
+            --rate-limit-delay 1.5 \
+            --cubing-china
         env:
           NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
           SMTP_USER: ${{ secrets.SMTP_USER }}

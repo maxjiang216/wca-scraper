@@ -1,8 +1,12 @@
 .env
 .venv/
 watch_list.json
+watch_list.yaml
 __pycache__/
 *.pyc
 *.log
 wca_notify_dry_run.txt
+wca_weekly_dry_run.txt
+wca_records_dry_run.txt
+records_state.json
 *.egg-info/

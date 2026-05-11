@@ -1,0 +1,96 @@
+"""WCA Live GraphQL API (recent records, no auth)."""
+
+from __future__ import annotations
+
+from typing import Any, Optional
+
+import requests
+
+LIVE_API_URL = "https://live.worldcubeassociation.org/api"
+
+RECENT_RECORDS_QUERY = """
+query RecentRecords {
+  recentRecords {
+    id
+    tag
+    type
+    attemptResult
+    result {
+      best
+      average
+      singleRecordTag
+      averageRecordTag
+      person {
+        wcaId
+        name
+        country { iso2 }
+      }
+      round {
+        name
+        competitionEvent {
+          event { id name }
+        }
+      }
+    }
+  }
+}
+"""
+
+
+def _graphql(query: str) -> dict[str, Any]:
+    r = requests.post(
+        LIVE_API_URL,
+        json={"query": query},
+        headers={"Content-Type": "application/json"},
+        timeout=60,
+    )
+    r.raise_for_status()
+    data = r.json()
+    if data.get("errors"):
+        raise RuntimeError(f"WCA Live GraphQL errors: {data['errors']}")
+    return data.get("data") or {}
+
+
+def get_recent_records_raw() -> list[dict[str, Any]]:
+    """Raw ``recentRecords`` entries from WCA Live."""
+    data = _graphql(RECENT_RECORDS_QUERY)
+    rows = data.get("recentRecords") or []
+    if not isinstance(rows, list):
+        return []
+    return rows
+
+
+def normalize_live_record(row: dict[str, Any]) -> Optional[dict[str, Any]]:
+    """Flatten a recentRecords row for filtering / email."""
+    res = row.get("result") or {}
+    if not isinstance(res, dict):
+        return None
+    person = res.get("person") or {}
+    rd = res.get("round") or {}
+    ev_wrap = rd.get("competitionEvent") or {}
+    ev = ev_wrap.get("event") or {}
+    wca_id = (person.get("wcaId") or "").strip().upper()
+    event_id = (ev.get("id") or "").strip()
+    if not wca_id:
+        return None
+    return {
+        "live_id": row.get("id"),
+        "tag": (row.get("tag") or "").strip().upper(),
+        "type": (row.get("type") or "").strip().lower(),
+        "attempt_result": row.get("attemptResult"),
+        "best": res.get("best"),
+        "average": res.get("average"),
+        "single_record_tag": res.get("singleRecordTag"),
+        "average_record_tag": res.get("averageRecordTag"),
+        "wca_id": wca_id,
+        "name": person.get("name") or wca_id,
+        "country_iso2": ((person.get("country") or {}).get("iso2") or "") or None,
+        "event_id": event_id,
+        "event_name": ev.get("name") or event_id,
+        "round_name": rd.get("name") or "",
+    }
+
+
+def continental_alerts_enabled(continental_config: list[str]) -> bool:
+    """User opted into continental record alerts (YAML uses NAR/ER/… — Live uses ``CR``)."""
+    return bool(continental_config)
