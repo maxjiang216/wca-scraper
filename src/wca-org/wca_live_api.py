@@ -20,6 +20,9 @@ query RecentRecords {
       average
       singleRecordTag
       averageRecordTag
+      attempts {
+        result
+      }
       person {
         wcaId
         name
@@ -73,6 +76,14 @@ def normalize_live_record(row: dict[str, Any]) -> Optional[dict[str, Any]]:
     event_id = (ev.get("id") or "").strip()
     if not wca_id:
         return None
+    attempts_raw: list[int] = []
+    for att in res.get("attempts") or []:
+        if isinstance(att, dict) and att.get("result") is not None:
+            try:
+                attempts_raw.append(int(att["result"]))
+            except (TypeError, ValueError):
+                pass
+
     return {
         "live_id": row.get("id"),
         "tag": (row.get("tag") or "").strip().upper(),
@@ -80,6 +91,7 @@ def normalize_live_record(row: dict[str, Any]) -> Optional[dict[str, Any]]:
         "attempt_result": row.get("attemptResult"),
         "best": res.get("best"),
         "average": res.get("average"),
+        "attempts": attempts_raw,
         "single_record_tag": res.get("singleRecordTag"),
         "average_record_tag": res.get("averageRecordTag"),
         "wca_id": wca_id,
