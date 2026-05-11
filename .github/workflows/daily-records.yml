@@ -1,0 +1,59 @@
+name: Daily Records Alert
+
+on:
+  schedule:
+    # 15:00 UTC ≈ 7am US/Pacific (standard); ≈ 8am during daylight saving.
+    - cron: "0 15 * * *"
+  workflow_dispatch:
+
+jobs:
+  records:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore WCA records state
+        uses: actions/cache/restore@v4
+        with:
+          path: records_state.json
+          # Unique key per run; restore via prefix so the latest prior run is used.
+          key: wca-records-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            wca-records-${{ github.ref_name }}-
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Create watch list
+        env:
+          WATCH_LIST: ${{ secrets.WATCH_LIST }}
+        run: printf '%s' "$WATCH_LIST" > watch_list.yaml
+
+      - name: Run records notifier
+        run: |
+          uv run wca records \
+            -w watch_list.yaml \
+            -e "$NOTIFY_EMAIL" \
+            --smtp-user "$SMTP_USER" \
+            --smtp-password "$SMTP_PASSWORD" \
+            --state-file records_state.json
+        env:
+          NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+
+      - name: Save WCA records state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: records_state.json
+          key: wca-records-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}

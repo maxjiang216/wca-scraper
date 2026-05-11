@@ -46,6 +46,7 @@ def get_upcoming_competitions(
     end_date: Optional[datetime] = None,
     country: Optional[str] = None,
     on_progress: Optional[Callable[[int, int], None]] = None,
+    max_results: Optional[int] = None,
 ) -> list[dict]:
     """
     Fetch upcoming competitions from the WCA API. Paginates until all pages are fetched.
@@ -55,6 +56,9 @@ def get_upcoming_competitions(
         end_date: Competitions starting on or before this date
         country: Filter by country ISO2 code (e.g. 'US')
         on_progress: Optional callback(page_num, total_so_far) after each page
+        max_results: Stop once at least this many non-cancelled competitions are collected.
+            Useful with API ``sort=start_date`` (default) when only the earliest comps are needed.
+            Omit to fetch every page.
 
     Returns:
         List of competition dicts with id, name, start_date, etc.
@@ -83,8 +87,12 @@ def get_upcoming_competitions(
             if c.get("cancelled_at"):
                 continue
             all_competitions.append(c)
+        if max_results is not None and len(all_competitions) > max_results:
+            del all_competitions[max_results:]
         if on_progress:
             on_progress(page, len(all_competitions))
+        if max_results is not None and len(all_competitions) >= max_results:
+            break
         if len(competitions) < COMPETITIONS_PAGE_SIZE:
             break
         page += 1
@@ -128,6 +136,75 @@ def get_competition_wcif(
         resp.raise_for_status()
         return resp.json()
     resp.raise_for_status()  # unreachable; raises on final 429
+
+
+def personal_best_world_rank(
+    person: dict,
+    event_id: str,
+    *,
+    prefer: tuple[str, ...] = ("single", "average"),
+) -> Optional[tuple[int, str]]:
+    """
+    Best (minimum) single-event worldRanking from person's personalBests for event_id.
+
+    Prefers PB type order in ``prefer`` (e.g. single before average).
+    Rows without a usable positive ``worldRanking`` are skipped.
+
+    Returns:
+        (world_ranking, pb_type_used) or None if unranked / no PB for event.
+    """
+    pbs = person.get("personalBests") or []
+    preferred = tuple(prefer)
+
+    # Prefer earlier types in ``prefer``: use single PB if ranked, else fall back to average, etc.
+    for pb_type in preferred:
+        type_best: Optional[int] = None
+        for pb in pbs:
+            if pb.get("eventId") != event_id or pb.get("type") != pb_type:
+                continue
+            rank = pb.get("worldRanking")
+            if rank is None:
+                continue
+            try:
+                r = int(rank)
+            except (TypeError, ValueError):
+                continue
+            if r <= 0:
+                continue
+            if type_best is None or r < type_best:
+                type_best = r
+        if type_best is not None:
+            return (type_best, pb_type)
+
+    return None
+
+
+def get_top_ranked_registration_events(
+    person: dict,
+    event_ids: list[str],
+    *,
+    max_rank: int,
+) -> list[dict]:
+    """
+    For a competing person, return events (subset of ``event_ids``) where world rank ≤ max_rank.
+
+    Each item: ``{"event_id", "rank", "pb_type"}``.
+    Sorted by rank ascending, then event_id.
+    """
+    out: list[dict] = []
+    seen: set[str] = set()
+    for eid in event_ids:
+        if eid in seen:
+            continue
+        pair = personal_best_world_rank(person, eid)
+        if pair is None:
+            continue
+        rank, pb_type = pair
+        if rank <= max_rank:
+            seen.add(eid)
+            out.append({"event_id": eid, "rank": rank, "pb_type": pb_type})
+    out.sort(key=lambda x: (x["rank"], x["event_id"]))
+    return out
 
 
 def get_competing_registrants(wcif: dict) -> list[dict]:
