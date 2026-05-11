@@ -18,7 +18,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from .cubing_china_api import cubing_matches_for_watch_list, list_cubing_comps_overlapping_window
-from .notify import format_results_by_week, send_email
+from .notify import format_psych_sheet_email, send_email
 from .wca_api import (
     get_competition_wcif,
     get_competitor_schedule,
@@ -69,7 +69,7 @@ def gather_psych_sheet_results(
     Matches watched competitors across WCA (+ optional cubing.com) for [start.date, end.date].
 
     ``events`` maps event id → ``WatchEventConfig`` (see ``watch_list``).
-    Each result item matches the structure expected by ``format_results_by_week``.
+    Each result item matches the structure expected by ``format_results_by_week`` / ``format_psych_sheet_email``.
     """
     watch_list = flat_per_event_watches(events)
     country = None
@@ -198,7 +198,7 @@ def run(
     start_date: datetime | None = None,
     end_date: datetime | None = None,
     country_filter: str | None = None,
-    weeks_ahead: int = 2,
+    weeks_ahead: int = 8,
     rate_limit_delay_s: float = 1.0,
     timezone: str | None = None,
     cubing_china: bool = False,
@@ -265,7 +265,7 @@ def run(
         logging.info("No competitions with watched competitors found.")
         return
 
-    html_body = format_results_by_week(results, timezone=tz)
+    html_body = format_psych_sheet_email(results, timezone=tz)
     subject = f"WCA: {len(results)} competition(s) with watched competitors"
 
     if dry_run:

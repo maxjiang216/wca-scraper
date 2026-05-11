@@ -11,6 +11,15 @@ import requests
 
 BASE_URL = "https://cubing.com/api/v0"
 
+# cubing.com 403s requests that use the default python-requests user-agent.
+_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json",
+}
+
 
 def _ts_to_date(ts: Any) -> Optional[str]:
     """Unix seconds → YYYY-MM-DD in UTC."""
@@ -25,7 +34,7 @@ def _ts_to_date(ts: Any) -> Optional[str]:
 
 def _get_json(path: str, *, params: Optional[dict] = None) -> dict:
     url = f"{BASE_URL}{path}" if path.startswith("/") else f"{BASE_URL}/{path}"
-    r = requests.get(url, params=params or {}, timeout=60)
+    r = requests.get(url, params=params or {}, headers=_HEADERS, timeout=60)
     r.raise_for_status()
     data = r.json()
     if not isinstance(data, dict):

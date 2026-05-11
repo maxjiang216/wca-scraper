@@ -2,6 +2,7 @@
 Email notification when watched competitors are competing at upcoming competitions.
 """
 
+from html import escape
 import re
 import smtplib
 from datetime import datetime
@@ -31,6 +32,192 @@ EVENT_NAMES = {
     "333mbf": "MBLD",
 }
 
+# Longer event titles for record digest rows (WCA-style naming).
+EVENT_DIGEST_LABELS = {
+    "333": "3x3x3 Cube",
+    "222": "2x2x2 Cube",
+    "444": "4x4x4 Cube",
+    "555": "5x5x5 Cube",
+    "666": "6x6x6 Cube",
+    "777": "7x7x7 Cube",
+    "333bf": "3x3x3 Blindfolded",
+    "333fm": "3x3x3 Fewest Moves",
+    "333oh": "3x3x3 One-Handed",
+    "333ft": "3x3x3 With Feet",
+    "minx": "Megaminx",
+    "pyram": "Pyraminx",
+    "clock": "Clock",
+    "skewb": "Skewb",
+    "sq1": "Square-1",
+    "444bf": "4x4x4 Blindfolded",
+    "555bf": "5x5x5 Blindfolded",
+    "333mbf": "3x3x3 Multi-Blind",
+}
+
+# Dark email theme (matches WCA Live–style digest cards).
+_EMAIL_BG = "#181818"
+_EMAIL_CARD = "#242424"
+_EMAIL_CARD_BORDER = "#2e2e2e"
+_EMAIL_TEXT = "#ffffff"
+_EMAIL_MUTED = "#9e9e9e"
+_EMAIL_MUTED2 = "#757575"
+_EMAIL_LINK = "#90caf9"
+_EMAIL_WR_BG = "#E53935"
+_EMAIL_WR_FG = "#ffffff"
+_EMAIL_CR_BG = "#FDD835"
+_EMAIL_CR_FG = "#111111"
+_EMAIL_NR_BG = "#1E88E5"
+_EMAIL_NR_FG = "#ffffff"
+_EMAIL_BADGE_NEUTRAL_BG = "#424242"
+_EMAIL_BADGE_NEUTRAL_FG = "#eeeeee"
+_EMAIL_FONT = (
+    "system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif"
+)
+
+
+def _digest_event_label(event_id: str) -> str:
+    return EVENT_DIGEST_LABELS.get(event_id, EVENT_NAMES.get(event_id, event_id))
+
+
+# Common ISO2 → English country name (for “from …” sublines). Fallback: ISO2 code.
+_ISO2_EN = {
+    "AD": "Andorra", "AE": "United Arab Emirates", "AM": "Armenia", "AR": "Argentina",
+    "AT": "Austria", "AU": "Australia", "AZ": "Azerbaijan", "BE": "Belgium", "BR": "Brazil",
+    "BY": "Belarus", "CA": "Canada", "CH": "Switzerland", "CL": "Chile", "CN": "China",
+    "CO": "Colombia", "CR": "Costa Rica", "CZ": "Czech Republic", "DE": "Germany",
+    "DK": "Denmark", "DO": "Dominican Republic", "EC": "Ecuador", "EE": "Estonia",
+    "EG": "Egypt", "ES": "Spain", "FI": "Finland", "FR": "France", "GB": "United Kingdom",
+    "GR": "Greece", "GT": "Guatemala", "HK": "Hong Kong", "HN": "Honduras", "HR": "Croatia",
+    "HU": "Hungary", "ID": "Indonesia", "IE": "Ireland", "IL": "Israel", "IN": "India",
+    "IQ": "Iraq", "IR": "Iran", "IS": "Iceland", "IT": "Italy", "JM": "Jamaica", "JO": "Jordan",
+    "JP": "Japan", "KE": "Kenya", "KR": "South Korea", "KW": "Kuwait", "KZ": "Kazakhstan",
+    "LB": "Lebanon", "LT": "Lithuania", "LU": "Luxembourg", "LV": "Latvia", "MA": "Morocco",
+    "MC": "Monaco", "MD": "Moldova", "MK": "North Macedonia", "MX": "Mexico", "MY": "Malaysia",
+    "NG": "Nigeria", "NI": "Nicaragua", "NL": "Netherlands", "NO": "Norway", "NZ": "New Zealand",
+    "PA": "Panama", "PE": "Peru", "PH": "Philippines", "PK": "Pakistan", "PL": "Poland",
+    "PR": "Puerto Rico", "PT": "Portugal", "PY": "Paraguay", "QA": "Qatar", "RO": "Romania",
+    "RS": "Serbia", "RU": "Russia", "SA": "Saudi Arabia", "SE": "Sweden", "SG": "Singapore",
+    "SI": "Slovenia", "SK": "Slovakia", "SV": "El Salvador", "TH": "Thailand", "TN": "Tunisia",
+    "TR": "Turkey", "TW": "Taiwan", "UA": "Ukraine", "US": "United States", "UY": "Uruguay",
+    "UZ": "Uzbekistan", "VE": "Venezuela", "VN": "Vietnam", "ZA": "South Africa",
+}
+
+
+def _country_line(iso2: str | None) -> str:
+    if not iso2 or not str(iso2).strip():
+        return ""
+    code = str(iso2).strip().upper()
+    name = _ISO2_EN.get(code, code)
+    return f" from {name}"
+
+
+def _badge_colors_for_tag(tag: str) -> tuple[str, str]:
+    t = (tag or "").strip().upper()
+    if t in ("", "—", "NONE"):
+        return _EMAIL_BADGE_NEUTRAL_BG, _EMAIL_BADGE_NEUTRAL_FG
+    if t == "WR":
+        return _EMAIL_WR_BG, _EMAIL_WR_FG
+    if t == "NR":
+        return _EMAIL_NR_BG, _EMAIL_NR_FG
+    if t in ("CR", "ER", "NAR", "SAR", "ASR", "OCR", "AFR", "OcR"):
+        return _EMAIL_CR_BG, _EMAIL_CR_FG
+    if len(t) <= 4 and t.endswith("R"):
+        return _EMAIL_CR_BG, _EMAIL_CR_FG
+    return _EMAIL_BADGE_NEUTRAL_BG, _EMAIL_BADGE_NEUTRAL_FG
+
+
+def _badge_markup(tag: str) -> str:
+    t = escape((tag or "").strip().upper() or "·")
+    bg, fg = _badge_colors_for_tag(tag)
+    return (
+        f'<span style="display:inline-block;background:{bg};color:{fg};font-weight:700;'
+        f'font-size:11px;letter-spacing:0.06em;padding:6px 10px;border-radius:4px;">{t}</span>'
+    )
+
+
+def _pick_primary_regional_tag(rs: object, ra: object) -> str:
+    for label in (ra, rs):
+        s = (str(label).strip() if label is not None else "")
+        if s and s.upper() not in ("—", "NONE", ""):
+            return s.upper()
+    return ""
+
+
+def _email_link(href: str, text: str) -> str:
+    t = escape(text)
+    return (
+        f'<a href="{escape(href)}" style="color:{_EMAIL_LINK};text-decoration:none;'
+        f'border-bottom:1px solid {_EMAIL_MUTED2};">{t}</a>'
+    )
+
+
+def _email_dark_document(
+    *,
+    title: str,
+    subtitle: str | None,
+    body_html: str,
+    footer_html: str | None = None,
+) -> str:
+    sub = (
+        f'<p style="margin:0 0 20px 0;color:{_EMAIL_MUTED};font-size:14px;line-height:1.5;">'
+        f"{subtitle}</p>"
+        if subtitle
+        else ""
+    )
+    foot = footer_html or ""
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="color-scheme" content="dark">
+<meta name="supported-color-schemes" content="dark">
+<title>{escape(title)}</title>
+</head>
+<body style="margin:0;padding:0;background:{_EMAIL_BG};">
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0"
+ style="background:{_EMAIL_BG};border-collapse:collapse;">
+<tr><td align="center" style="padding:28px 16px;">
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0"
+ style="max-width:640px;border-collapse:collapse;font-family:{_EMAIL_FONT};">
+<tr><td>
+<h1 style="margin:0 0 8px 0;color:{_EMAIL_TEXT};font-size:22px;font-weight:700;
+ letter-spacing:-0.02em;line-height:1.25;">{escape(title)}</h1>
+{sub}
+{body_html}
+{foot}
+</td></tr>
+</table>
+</td></tr>
+</table>
+</body>
+</html>"""
+
+
+def _record_row_table(badge_inner: str, line1: str, line2: str) -> str:
+    return f"""<table role="presentation" width="100%" cellspacing="0" cellpadding="0"
+ style="margin:10px 0;background:{_EMAIL_CARD};border-radius:8px;border:1px solid {_EMAIL_CARD_BORDER};
+ border-collapse:separate;">
+<tr><td style="padding:14px 16px;">
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0">
+<tr>
+<td valign="middle" style="width:1%;padding:0 14px 0 0;white-space:nowrap;">{badge_inner}</td>
+<td valign="middle" style="padding:0;">
+<div style="color:{_EMAIL_TEXT};font-size:15px;line-height:1.4;font-weight:500;">{line1}</div>
+<div style="color:{_EMAIL_MUTED};font-size:13px;margin-top:6px;line-height:1.45;">{line2}</div>
+</td>
+</tr>
+</table>
+</td></tr>
+</table>"""
+
+
+def _section_heading(text: str) -> str:
+    return (
+        f'<h2 style="margin:28px 0 12px 0;color:{_EMAIL_TEXT};font-size:16px;font-weight:700;'
+        f'letter-spacing:0.02em;border-bottom:1px solid {_EMAIL_CARD_BORDER};padding-bottom:8px;">'
+        f"{escape(text)}</h2>"
+    )
+
 
 def _strip_parens(s: str) -> str:
     """Remove parenthetical content e.g. 'Name (本地名)' -> 'Name'."""
@@ -58,12 +245,11 @@ def format_results_by_week(
       Competition 2 ...
     """
     if not results:
-        return "<p>No results.</p>"
+        return (
+            f'<p style="color:{_EMAIL_MUTED};margin:0;">No competitions with watched competitors.</p>'
+        )
 
-    parts = [
-        '<h1 style="margin-bottom: 0.8em;">Watched Competitors — Upcoming Competitions</h1>',
-        f'<p style="color: #666; margin-bottom: 1em;">All times in {_tz_display(timezone)}</p>',
-    ]
+    parts: list[str] = []
 
     def _parse_round_time(time_str: str, comp_start: str) -> datetime | None:
         """Parse 'Fri Feb 20, 05:50 PM' to datetime. Uses comp start for year."""
@@ -139,23 +325,48 @@ def format_results_by_week(
         else:
             date_str = r["date_str"]  # fallback to comp dates
 
-        comp_link = f'<a href="{comp_url}">{comp_name}</a>'
-        country_part = f" ({country})" if country else ""
-        comp_header = f"{comp_link}{country_part} ({date_str})"
-        parts.append(f'<h2 style="margin-top: 1.2em; margin-bottom: 0.4em;">{comp_header}</h2>')
+        comp_link = _email_link(comp_url, comp_name)
+        country_name = _ISO2_EN.get(str(country).strip().upper(), (country or "").strip())
+        country_part = f'<span style="color:{_EMAIL_MUTED};font-weight:400;"> · {escape(country_name)}</span>' if country else ""
+        date_muted = f'<span style="color:{_EMAIL_MUTED};font-weight:400;">{escape(date_str)}</span>'
+        parts.append(
+            f'<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin:0 0 18px 0;'
+            f'background:{_EMAIL_CARD};border-radius:8px;border:1px solid {_EMAIL_CARD_BORDER};'
+            f'border-collapse:separate;">'
+            f'<tr><td style="padding:16px 18px;">'
+            f'<div style="font-size:16px;font-weight:700;line-height:1.35;margin-bottom:12px;color:{_EMAIL_TEXT};">'
+            f"{comp_link}{country_part}</div>"
+            f'<div style="color:{_EMAIL_MUTED};font-size:13px;margin-bottom:14px;">{date_muted}</div>'
+            f'<table role="presentation" width="100%" cellspacing="0" cellpadding="0">'
+        )
 
-        # Sort events earliest to latest (full date+time), then by event for ties
         def event_sort_key(item: tuple) -> tuple:
             (eid, rd), (time_str, _) = item
             dt = _parse_round_time(time_str, comp_start)
             return (dt if dt else datetime.max, eid, rd)
 
-        for (eid, rd), (time_str, names) in sorted(event_rounds.items(), key=event_sort_key):
+        for i, ((eid, rd), (time_str, names)) in enumerate(
+            sorted(event_rounds.items(), key=event_sort_key),
+        ):
             ev = EVENT_NAMES.get(eid, eid)
-            label = f"{ev} {rd}".strip() if rd else ev
-            time_part = f" ({time_str})" if time_str else ""
-            comps = ", ".join(names)
-            parts.append(f'<p style="margin: 0.3em 0 0.3em 1.2em;">• <strong>{label}</strong>{time_part}: {comps}</p>')
+            label = escape(f"{ev} {rd}".strip() if rd else ev)
+            time_esc = escape(time_str) if time_str else ""
+            comps = escape(", ".join(names))
+            time_row = (
+                f'<div style="color:{_EMAIL_MUTED};font-size:12px;margin-bottom:4px;">{time_esc}</div>'
+                if time_esc
+                else ""
+            )
+            top_rule = "" if i == 0 else f"border-top:1px solid {_EMAIL_CARD_BORDER};"
+            parts.append(
+                f'<tr><td style="padding:12px 0;{top_rule}">'
+                f"{time_row}"
+                f'<div style="color:{_EMAIL_TEXT};font-size:14px;font-weight:600;">{label}</div>'
+                f'<div style="color:{_EMAIL_MUTED};font-size:13px;margin-top:4px;">{comps}</div>'
+                f"</td></tr>"
+            )
+
+        parts.append("</table></td></tr></table>")
 
     return "\n".join(parts)
 
@@ -181,6 +392,52 @@ def _format_centiseconds(event_id: str, raw: str) -> str:
     return f"{m}:{r:06.3f}".rstrip("0").rstrip(".")
 
 
+def _wca_person_url(wca_id: str) -> str:
+    return f"https://www.worldcubeassociation.org/persons/{wca_id}"
+
+
+def _format_result_value(event_id: str, raw: object) -> str:
+    """Human-readable attempt/result (centiseconds, MBLD solved count, DNF/DNS)."""
+    if raw is None:
+        return "—"
+    try:
+        v = int(raw)
+    except (TypeError, ValueError):
+        return str(raw).strip() or "—"
+    if v == -1:
+        return "DNF"
+    if v == -2:
+        return "DNS"
+    if event_id == "333mbf":
+        from .results_format import mbld_solved_count
+
+        sc = mbld_solved_count(v)
+        return f"{sc} solved" if sc is not None else str(v)
+    return _format_centiseconds(event_id, str(v))
+
+
+def _live_average_attempts_note(event_id: str, typ: str, attempts: object) -> str:
+    if (typ or "").lower() != "average":
+        return ""
+    if not isinstance(attempts, list) or not attempts:
+        return ""
+    inner = ", ".join(_format_result_value(event_id, x) for x in attempts)
+    return f' <span style="color:{_EMAIL_MUTED2};font-size:0.92em;">({inner})</span>'
+
+
+def _competition_attempts_note(event_id: str, attempts: object) -> str:
+    if not isinstance(attempts, list) or not attempts:
+        return ""
+    if event_id == "333mbf":
+        vals = [a for a in attempts if a not in (None, 0)]
+    else:
+        vals = list(attempts)
+    if not vals:
+        return ""
+    inner = ", ".join(_format_result_value(event_id, x) for x in vals)
+    return f' <span style="color:{_EMAIL_MUTED2};font-size:0.92em;">[{inner}]</span>'
+
+
 def format_records_alert(
     live_records: list[dict],
     competition_results: list[dict],
@@ -190,37 +447,43 @@ def format_records_alert(
     """HTML for daily ``wca records`` (WCA Live + new competition result rows)."""
     from .results_format import mbld_solved_count
 
-    parts = [
-        '<h1 style="margin-bottom: 0.6em;">WCA daily digest</h1>',
-        f'<p style="color:#666">Timezone note: {_tz_display(timezone)}</p>',
-        "<p style='color:#444;font-size:0.95em;'>Per event: <strong>WR</strong>, optional "
-        "continental tags, <strong>sub</strong> single/average (all competitors), or <strong>sup</strong> "
-        "MBLD points — <strong>OR</strong> together. Default is WR-only.</p>",
+    body_parts: list[str] = [
+        f'<p style="margin:0 0 16px 0;color:{_EMAIL_MUTED};font-size:14px;line-height:1.55;">'
+        f"Times and schedule notes use <strong>{escape(_tz_display(timezone))}</strong> where relevant. "
+        f"Per event: <strong>WR</strong>, optional continental tags, <strong>sub</strong> single/average, "
+        f"or <strong>sup</strong> MBLD — combined with <strong>OR</strong>. Default is WR-only.</p>"
     ]
+
     if live_records:
-        parts.append("<h2>WCA Live</h2>")
+        body_parts.append(_section_heading("WCA Live"))
         for r in live_records:
-            ev = EVENT_NAMES.get(r.get("event_id") or "", r.get("event_id") or "")
-            tag = r.get("tag") or ""
-            kind = r.get("type") or ""
-            val = r.get("attempt_result")
-            parts.append(
-                "<p style='margin:0.4em 0 0.4em 1em;'>· <strong>{}</strong> {} <em>{}</em> — "
-                "{} ({}) [{}]</p>".format(
-                    tag,
-                    ev,
-                    kind,
-                    _strip_parens(r.get("name") or ""),
-                    r.get("wca_id") or "",
-                    val,
-                ),
-            )
-    if competition_results:
-        parts.append("<h2>Competition results (published)</h2>")
-        for r in competition_results:
-            ev = EVENT_NAMES.get(r.get("event_id") or "", r.get("event_id") or "")
             eid = r.get("event_id") or ""
+            ev_title = escape(_digest_event_label(eid))
+            tag_raw = (r.get("tag") or "").strip()
+            kind_raw = (r.get("type") or "").lower()
+            kind_phrase = "average of" if kind_raw == "average" else "single of"
+            wca_id = (r.get("wca_id") or "").strip()
+            name_full = escape((r.get("name") or wca_id or "").strip())
+            val_disp = escape(_format_result_value(eid, r.get("attempt_result")))
+            attempts_note = _live_average_attempts_note(eid, r.get("type") or "", r.get("attempts"))
+            country_s = _country_line(r.get("country_iso2"))
+            line1 = (
+                f'{ev_title} {kind_phrase} <strong style="color:{_EMAIL_TEXT};">{val_disp}</strong>'
+                f"{attempts_note}"
+            )
+            line2 = (
+                f"{name_full}{country_s} · "
+                f'{_email_link(_wca_person_url(wca_id), wca_id)}'
+            )
+            body_parts.append(_record_row_table(_badge_markup(tag_raw), line1, line2))
+
+    if competition_results:
+        body_parts.append(_section_heading("Competition results (published)"))
+        for r in competition_results:
+            eid = r.get("event_id") or ""
+            ev_title = escape(_digest_event_label(eid))
             cid = r.get("competition_id") or ""
+            wca_id = (r.get("wca_id") or "").strip()
             rs = (r.get("regional_single_record") or "") or "—"
             ra = (r.get("regional_average_record") or "") or "—"
             if eid == "333mbf":
@@ -236,27 +499,50 @@ def format_records_alert(
                 b_disp = f"{b_sc} solved" if b_sc is not None else str(b_raw or "—")
                 a_disp = f"{a_sc} solved" if a_sc is not None else str(a_raw or "—")
             else:
-                b_disp = _format_centiseconds(eid, str(r.get("best") or ""))
-                a_disp = _format_centiseconds(eid, str(r.get("average") or ""))
-            parts.append(
-                "<p style='margin:0.4em 0 0.4em 1em;'>· <strong>{}</strong> ({}) — {} @ "
-                '<a href="https://www.worldcubeassociation.org/competitions/{}">{}</a> '
-                "single {} avg {} "
-                "<span style='color:#666'>[{} / {}]</span></p>".format(
-                    _strip_parens(r.get("name") or ""),
-                    r.get("wca_id") or "",
-                    ev,
-                    cid,
-                    cid,
-                    b_disp,
-                    a_disp,
-                    rs,
-                    ra,
-                ),
+                b_disp = _format_result_value(eid, r.get("best"))
+                a_disp = _format_result_value(eid, r.get("average"))
+            attempts_note = _competition_attempts_note(eid, r.get("attempts"))
+            badge_tag = _pick_primary_regional_tag(rs, ra)
+            comp_page = f"https://www.worldcubeassociation.org/competitions/{cid}"
+            line1 = (
+                f'{_email_link(comp_page, cid)} — {ev_title}: '
+                f'single <strong style="color:{_EMAIL_TEXT};">{escape(str(b_disp))}</strong>'
+                f' · avg <strong style="color:{_EMAIL_TEXT};">{escape(str(a_disp))}</strong>'
+                f"{attempts_note}"
             )
+            name_full = escape((r.get("name") or wca_id or "").strip())
+            iso2 = r.get("country_iso2")
+            meta = (
+                f'<span style="color:{_EMAIL_MUTED2};">records · single {escape(str(rs))} · '
+                f"avg {escape(str(ra))}</span>"
+            )
+            line2 = f"{name_full}{_country_line(iso2)} · {_email_link(_wca_person_url(wca_id), wca_id)} · {meta}"
+            body_parts.append(_record_row_table(_badge_markup(badge_tag), line1, line2))
+
     if not live_records and not competition_results:
-        parts.append("<p>No new items matched your rules in this check.</p>")
-    return "\n".join(parts)
+        body_parts.append(
+            f'<p style="color:{_EMAIL_MUTED};margin:8px 0 0 0;">No new items matched your rules in this check.</p>'
+        )
+
+    return _email_dark_document(
+        title="WCA daily digest",
+        subtitle=f"Timezone: {_tz_display(timezone)}",
+        body_html="\n".join(body_parts),
+    )
+
+
+def format_psych_sheet_email(
+    psych_results: list[dict],
+    *,
+    timezone: str,
+) -> str:
+    """Full dark-mode HTML email for ``wca notify`` (psych sheet only)."""
+    inner = format_results_by_week(psych_results, timezone=timezone)
+    return _email_dark_document(
+        title="WCA — watched competitors",
+        subtitle=f"Round times in {_tz_display(timezone)}",
+        body_html=inner,
+    )
 
 
 def format_weekly_digest(
@@ -266,15 +552,18 @@ def format_weekly_digest(
 ) -> str:
     """Combined HTML for ``wca weekly`` (upcoming psych sheet only)."""
     psych_block = format_results_by_week(psych_results, timezone=timezone)
-    parts = [
-        '<h1 style="margin-bottom:0.3em;">WCA weekly — upcoming psych sheet</h1>',
-        f'<p style="color:#666">Times shown in {_tz_display(timezone)}</p>',
-        "<h2 style=\"margin-top:1em;\">Watched competitors</h2>",
-        psych_block,
-        "<hr style=\"margin:1.5em 0;\">",
-        "<p style=\"color:#666;font-size:0.9em;\">Daily result digests: <code>wca records</code>.</p>",
-    ]
-    return "\n".join(parts)
+    footer = (
+        f'<p style="margin:24px 0 0 0;color:{_EMAIL_MUTED};font-size:13px;line-height:1.5;">'
+        f'Daily result digests: run <code style="background:{_EMAIL_CARD};color:{_EMAIL_TEXT};'
+        f'padding:2px 6px;border-radius:4px;font-size:12px;">wca records</code> on your schedule.'
+        f"</p>"
+    )
+    body = f'{_section_heading("Watched competitors")}\n{psych_block}\n{footer}'
+    return _email_dark_document(
+        title="WCA weekly — upcoming psych sheet",
+        subtitle=f"Round times in {_tz_display(timezone)}",
+        body_html=body,
+    )
 
 
 def send_email(

@@ -19,7 +19,7 @@ def run_weekly_digest(
     start_date: datetime | None = None,
     end_date: datetime | None = None,
     country_filter: str | None = None,
-    weeks_ahead: int = 2,
+    weeks_ahead: int = 8,
     rate_limit_delay_s: float = 1.0,
     timezone: str | None = None,
     cubing_china: bool = False,
