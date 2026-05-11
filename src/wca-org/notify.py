@@ -4,7 +4,6 @@ Email notification when watched competitors are competing at upcoming competitio
 
 import re
 import smtplib
-from collections import defaultdict
 from datetime import datetime
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -158,6 +157,123 @@ def format_results_by_week(
             comps = ", ".join(names)
             parts.append(f'<p style="margin: 0.3em 0 0.3em 1.2em;">• <strong>{label}</strong>{time_part}: {comps}</p>')
 
+    return "\n".join(parts)
+
+
+def _format_centiseconds(event_id: str, raw: str) -> str:
+    """Human-readable result from TSV ``best`` / ``average`` (centiseconds for most speedsolving)."""
+    s = (raw or "").strip()
+    if not s or s in ("0", "-1", "-2"):
+        return s or "—"
+    if event_id in ("333fm", "333mbf", "magic", "mmagic"):
+        return s
+    try:
+        cs = int(s)
+    except ValueError:
+        return s
+    if cs < 0:
+        return s
+    sec = cs / 100.0
+    if sec < 60:
+        return f"{sec:.2f}"
+    m = int(sec // 60)
+    r = sec - m * 60
+    return f"{m}:{r:06.3f}".rstrip("0").rstrip(".")
+
+
+def format_records_alert(
+    live_records: list[dict],
+    competition_results: list[dict],
+    *,
+    timezone: str = "America/Vancouver",
+) -> str:
+    """HTML for daily ``wca records`` (WCA Live + new competition result rows)."""
+    from .results_format import mbld_solved_count
+
+    parts = [
+        '<h1 style="margin-bottom: 0.6em;">WCA daily digest</h1>',
+        f'<p style="color:#666">Timezone note: {_tz_display(timezone)}</p>',
+        "<p style='color:#444;font-size:0.95em;'>Per event: <strong>WR</strong>, optional "
+        "continental tags, <strong>sub</strong> single/average (all competitors), or <strong>sup</strong> "
+        "MBLD points — <strong>OR</strong> together. Default is WR-only.</p>",
+    ]
+    if live_records:
+        parts.append("<h2>WCA Live</h2>")
+        for r in live_records:
+            ev = EVENT_NAMES.get(r.get("event_id") or "", r.get("event_id") or "")
+            tag = r.get("tag") or ""
+            kind = r.get("type") or ""
+            val = r.get("attempt_result")
+            parts.append(
+                "<p style='margin:0.4em 0 0.4em 1em;'>· <strong>{}</strong> {} <em>{}</em> — "
+                "{} ({}) [{}]</p>".format(
+                    tag,
+                    ev,
+                    kind,
+                    _strip_parens(r.get("name") or ""),
+                    r.get("wca_id") or "",
+                    val,
+                ),
+            )
+    if competition_results:
+        parts.append("<h2>Competition results (published)</h2>")
+        for r in competition_results:
+            ev = EVENT_NAMES.get(r.get("event_id") or "", r.get("event_id") or "")
+            eid = r.get("event_id") or ""
+            cid = r.get("competition_id") or ""
+            rs = (r.get("regional_single_record") or "") or "—"
+            ra = (r.get("regional_average_record") or "") or "—"
+            if eid == "333mbf":
+                b_raw, a_raw = r.get("best"), r.get("average")
+                try:
+                    b_sc = mbld_solved_count(int(b_raw)) if b_raw not in (None, "") else None
+                except (TypeError, ValueError):
+                    b_sc = None
+                try:
+                    a_sc = mbld_solved_count(int(a_raw)) if a_raw not in (None, "") else None
+                except (TypeError, ValueError):
+                    a_sc = None
+                b_disp = f"{b_sc} solved" if b_sc is not None else str(b_raw or "—")
+                a_disp = f"{a_sc} solved" if a_sc is not None else str(a_raw or "—")
+            else:
+                b_disp = _format_centiseconds(eid, str(r.get("best") or ""))
+                a_disp = _format_centiseconds(eid, str(r.get("average") or ""))
+            parts.append(
+                "<p style='margin:0.4em 0 0.4em 1em;'>· <strong>{}</strong> ({}) — {} @ "
+                '<a href="https://www.worldcubeassociation.org/competitions/{}">{}</a> '
+                "single {} avg {} "
+                "<span style='color:#666'>[{} / {}]</span></p>".format(
+                    _strip_parens(r.get("name") or ""),
+                    r.get("wca_id") or "",
+                    ev,
+                    cid,
+                    cid,
+                    b_disp,
+                    a_disp,
+                    rs,
+                    ra,
+                ),
+            )
+    if not live_records and not competition_results:
+        parts.append("<p>No new items matched your rules in this check.</p>")
+    return "\n".join(parts)
+
+
+def format_weekly_digest(
+    psych_results: list[dict],
+    *,
+    timezone: str,
+) -> str:
+    """Combined HTML for ``wca weekly`` (upcoming psych sheet only)."""
+    psych_block = format_results_by_week(psych_results, timezone=timezone)
+    parts = [
+        '<h1 style="margin-bottom:0.3em;">WCA weekly — upcoming psych sheet</h1>',
+        f'<p style="color:#666">Times shown in {_tz_display(timezone)}</p>',
+        "<h2 style=\"margin-top:1em;\">Watched competitors</h2>",
+        psych_block,
+        "<hr style=\"margin:1.5em 0;\">",
+        "<p style=\"color:#666;font-size:0.9em;\">Daily result digests: <code>wca records</code>.</p>",
+    ]
     return "\n".join(parts)
 
 

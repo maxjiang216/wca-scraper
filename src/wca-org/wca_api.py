@@ -9,7 +9,7 @@ Uses the public WCA v0 API - no authentication required.
 import logging
 import time
 import requests
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import Callable, Optional
 from zoneinfo import ZoneInfo
 
@@ -99,6 +99,156 @@ def get_upcoming_competitions(
         time.sleep(0.5)  # Avoid 429 when fetching multiple pages
 
     return all_competitions
+
+
+def get_competitions_ended_within_days(
+    *,
+    days: int = 7,
+    lookback_start_days: int = 45,
+    country: Optional[str] = None,
+    on_progress: Optional[Callable[[int, int], None]] = None,
+    today: Optional[date] = None,
+) -> list[dict]:
+    """
+    Competitions whose ``end_date`` falls in the last ``days`` days (inclusive of ``today``).
+
+    The WCA competitions API filters by competition **start** date, so we fetch a window of
+    start dates from ``today - lookback_start_days`` through ``today`` and filter client-side.
+    """
+    today_d = today or date.today()
+    cutoff = today_d - timedelta(days=days - 1) if days > 0 else today_d
+    start_fetch = datetime(today_d.year, today_d.month, today_d.day) - timedelta(
+        days=lookback_start_days,
+    )
+    end_fetch = datetime(today_d.year, today_d.month, today_d.day)
+
+    seen: set[str] = set()
+    out: list[dict] = []
+    page = 1
+    params_base: dict = {"sort": "start_date"}
+    params_base["start"] = start_fetch.strftime("%Y-%m-%d")
+    params_base["end"] = end_fetch.strftime("%Y-%m-%d")
+    if country:
+        params_base["country_iso2"] = country
+
+    while True:
+        params = {**params_base, "page": page}
+        resp = _get_with_429_retry(
+            f"{BASE_URL}/competitions",
+            params=params,
+            label=f"competitions (past window) page {page}",
+        )
+        competitions = resp.json()
+        if not competitions:
+            break
+        for c in competitions:
+            if c.get("cancelled_at"):
+                continue
+            cid = c.get("id")
+            if not cid or cid in seen:
+                continue
+            end_s = c.get("end_date") or c.get("start_date")
+            if not end_s:
+                continue
+            try:
+                end_d = datetime.strptime(end_s, "%Y-%m-%d").date()
+            except (ValueError, TypeError):
+                continue
+            if end_d >= cutoff and end_d <= today_d:
+                seen.add(cid)
+                out.append(c)
+        if on_progress:
+            on_progress(page, len(out))
+        if len(competitions) < COMPETITIONS_PAGE_SIZE:
+            break
+        page += 1
+        time.sleep(0.5)
+
+    return out
+
+
+def get_person_results(wca_id: str) -> list[dict]:
+    """All competition results for a WCA person ID (centiseconds; DNF = -1)."""
+    url = f"{BASE_URL}/persons/{wca_id}/results"
+    max_retries = 3
+    backoffs = (5, 10, 20)
+    for attempt in range(max_retries):
+        resp = requests.get(url, timeout=60)
+        if resp.status_code == 404:
+            return []
+        if resp.status_code == 429 and attempt < max_retries - 1:
+            time.sleep(backoffs[attempt])
+            continue
+        resp.raise_for_status()
+        data = resp.json()
+        return data if isinstance(data, list) else []
+    return []
+
+
+def get_competition_results(competition_id: str) -> list[dict]:
+    """All published results for one competition (same shape as ``get_person_results`` rows)."""
+    url = f"{BASE_URL}/competitions/{competition_id}/results"
+    max_retries = 3
+    backoffs = (5, 10, 20)
+    for attempt in range(max_retries):
+        resp = requests.get(url, timeout=120)
+        if resp.status_code == 404:
+            return []
+        if resp.status_code == 429 and attempt < max_retries - 1:
+            time.sleep(backoffs[attempt])
+            continue
+        resp.raise_for_status()
+        data = resp.json()
+        return data if isinstance(data, list) else []
+    return []
+
+
+_CONTINENT_TO_CR_TAG = {
+    "_North America": "NAR",
+    "_Europe": "ER",
+    "_Asia": "AsR",
+    "_Oceania": "OcR",
+    "_Africa": "AfR",
+    "_South America": "SAR",
+}
+
+_ISO2_TO_CR_TAG: dict[str, str] | None = None
+
+
+def get_iso2_to_continental_record_tag() -> dict[str, str]:
+    """Map country ISO2 → continental record code (NAR, ER, …) using WCA /countries."""
+    global _ISO2_TO_CR_TAG
+    if _ISO2_TO_CR_TAG is not None:
+        return _ISO2_TO_CR_TAG
+    resp = _get_with_429_retry(f"{BASE_URL}/countries", label="countries list")
+    rows = resp.json()
+    m: dict[str, str] = {}
+    if isinstance(rows, list):
+        for c in rows:
+            iso2 = (c.get("iso2") or "").strip().upper()
+            cont = c.get("continent_id")
+            if iso2 and cont in _CONTINENT_TO_CR_TAG:
+                m[iso2] = _CONTINENT_TO_CR_TAG[cont]
+    _ISO2_TO_CR_TAG = m
+    return m
+
+
+def fetch_person_bundle(wca_id: str) -> dict:
+    """JSON object from ``GET /persons/{id}`` (includes top-level ``personal_records``)."""
+    url = f"{BASE_URL}/persons/{wca_id}"
+    max_retries = 3
+    backoffs = (5, 10, 20)
+    for attempt in range(max_retries):
+        resp = requests.get(url, timeout=60)
+        if resp.status_code == 404:
+            return {}
+        if resp.status_code == 429 and attempt < max_retries - 1:
+            time.sleep(backoffs[attempt])
+            continue
+        resp.raise_for_status()
+        data = resp.json()
+        return data if isinstance(data, dict) else {}
+    return {}
 
 
 def get_competition_wcif(

@@ -1,0 +1,29 @@
+# Psych sheet: config.timezone; optional file-level continental_records (not inherited for daily CR).
+config:
+  timezone: America/Vancouver
+  continental_records:
+    - NAR
+    - ER
+    - AsR
+
+# --- Psych only (upcoming WCIF): people ---
+333:
+  people:
+    - "2023GENG02"
+    - "2019WANY36"
+  # Daily OR rules (default if omitted: WR only for this event):
+  continental_records: [NAR, AsR, ER] # match regional_*_record on published rows + Live CR
+  sub_single: 400 # any competitor: single strictly under (centiseconds)
+  sub_average: 500
+
+444:
+  people:
+    - "2010LEAR01"
+  continental_records: [] # WR only (+ optional subs if you add them)
+
+333mbf:
+  sup_points: 40 # multiblind: solved count >= 40 (WCA old encoding < 1e9)
+
+# Legacy flat list is people-only for psych:
+# 222:
+#   - "2010LEAR01"

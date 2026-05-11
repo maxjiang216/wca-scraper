@@ -5,7 +5,7 @@ Compatibility entrypoint for the watch-list notifier (same flags as ``wca notify
 Prefer: ``uv run wca notify --help``
 
 Usage:
-    python psych_sheet_notifier.py --watch-list watch_list.json --email you@example.com --dry-run
+    python psych_sheet_notifier.py --watch-list watch_list.yaml --email you@example.com --dry-run
 """
 
 import argparse
