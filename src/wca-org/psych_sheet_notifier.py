@@ -6,7 +6,8 @@ Runs weekly to check upcoming competitions for competitors on your watch list
 and emails you when any are competing.
 
 Usage:
-    uv run wca notify --watch-list watch_list.json --email you@example.com
+    python psych_sheet_notifier.py --watch-list watch_list.json --email you@example.com
+    python psych_sheet_notifier.py --help
 """
 
 import argparse
@@ -117,7 +118,7 @@ def run(
         country = country_filter.strip().split(",")[0].strip()
 
     total_watched = sum(len(s) for s in watch_list.values())
-    date_range = f"{start.date()} to {end.date()}"
+    date_range = f"{start.date()}" + (f" to {end.date()}" if end else " onward")
     logging.info(
         "Fetching competitions %s%s (watching %d competitor(s) across %d event(s))",
         date_range,
@@ -237,8 +238,10 @@ def run(
     logging.info("Email sent to %s", notify_email)
 
 
-def add_notify_arguments(parser: argparse.ArgumentParser) -> None:
-    """Attach notifier CLI flags to ``parser`` (standalone or ``wca notify`` subparser)."""
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Notify when watched WCA competitors are registered for upcoming competitions.",
+    )
     parser.add_argument(
         "--watch-list", "-w",
         type=Path,
@@ -251,12 +254,11 @@ def add_notify_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--start", "-s",
-        help="Start date YYYY-MM-DD (default: today). End date defaults to start + --weeks when --end omitted.",
+        help="Start date (YYYY-MM-DD). Default: today. When both --start and --end omitted: today, no end (open-ended).",
     )
     parser.add_argument(
         "--end",
-        help="End date YYYY-MM-DD for competitions listing. If omitted with --start, end = start + --weeks; "
-        "if both --start and --end omitted, end = today + --weeks.",
+        help="End date (YYYY-MM-DD). Omit for no end date (fetch all from start onward).",
     )
     parser.add_argument(
         "--country", "-c",
@@ -271,7 +273,7 @@ def add_notify_arguments(parser: argparse.ArgumentParser) -> None:
         "--weeks",
         type=int,
         default=2,
-        help="Weeks ahead from start when --end omitted (default: 2)",
+        help="How many weeks ahead to fetch competitions (default: 2). Used when --end not specified.",
     )
     parser.add_argument(
         "--rate-limit-delay",
@@ -282,7 +284,7 @@ def add_notify_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--timezone", "-z",
         default="America/Los_Angeles",
-        help="Timezone for schedule times (default: America/Los_Angeles). IANA name.",
+        help="Timezone for schedule times (default: America/Los_Angeles = PST). IANA name.",
     )
     parser.add_argument(
         "--smtp-host",
@@ -303,9 +305,13 @@ def add_notify_arguments(parser: argparse.ArgumentParser) -> None:
         "--smtp-password",
         help="SMTP password (use App Password for Gmail)",
     )
+    args = parser.parse_args()
 
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(message)s",
+    )
 
-def run_notify_from_args(args: argparse.Namespace) -> None:
     run(
         watch_list_path=args.watch_list,
         notify_email=args.email,
@@ -321,21 +327,6 @@ def run_notify_from_args(args: argparse.Namespace) -> None:
         smtp_password=args.smtp_password,
         dry_run=args.dry_run,
     )
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Notify when watched WCA competitors are registered for upcoming competitions.",
-    )
-    add_notify_arguments(parser)
-    args = parser.parse_args()
-
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(message)s",
-    )
-
-    run_notify_from_args(args)
 
 
 if __name__ == "__main__":

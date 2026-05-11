@@ -30,7 +30,7 @@ jobs:
 
       - name: Run notifier
         run: |
-          uv run wca notify \
+          uv run python psych_sheet_notifier.py \
             -w watch_list.json \
             -e "$NOTIFY_EMAIL" \
             --smtp-user "$SMTP_USER" \

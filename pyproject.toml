@@ -3,18 +3,14 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "wca-tools"
+name = "wca-psych-sheet-notifier"
 version = "0.1.0"
-description = "WCA tools: watch-list email notifier and upcoming competition top-ranked registrants report"
+description = "WCA psych sheet notifier - email when watched competitors are competing"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "requests>=2.28.0",
 ]
-
-[project.scripts]
-wca = "wca_org.cli:main"
-
 
 [tool.setuptools]
 packages = ["wca_org"]
