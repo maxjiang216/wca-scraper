@@ -329,8 +329,8 @@ def add_notify_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--weeks",
         type=int,
-        default=2,
-        help="Weeks ahead from start when --end omitted (default: 2)",
+        default=8,
+        help="Weeks ahead from start when --end omitted (default: 8)",
     )
     parser.add_argument(
         "--rate-limit-delay",

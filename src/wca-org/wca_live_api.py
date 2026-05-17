@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Optional
 
 import requests
@@ -54,12 +55,45 @@ def _graphql(query: str) -> dict[str, Any]:
     return data.get("data") or {}
 
 
+def _smoke_check_live_records(rows: list[dict[str, Any]]) -> None:
+    """Log warnings if WCA Live record schema looks unexpected."""
+    if not rows:
+        return
+    row = rows[0]
+    expected = ("id", "tag", "type", "attemptResult", "result")
+    missing = [k for k in expected if k not in row]
+    if missing:
+        logging.warning(
+            "[smoke] WCA Live record missing fields: %s; sample keys: %s",
+            missing, sorted(row.keys()),
+        )
+    res = row.get("result") or {}
+    if not isinstance(res, dict):
+        logging.warning("[smoke] WCA Live record.result is not a dict: %s", type(res).__name__)
+        return
+    res_expected = ("person", "best", "average", "attempts", "round")
+    res_missing = [k for k in res_expected if k not in res]
+    if res_missing:
+        logging.warning(
+            "[smoke] WCA Live record.result missing fields: %s; got keys: %s",
+            res_missing, sorted(res.keys()),
+        )
+    person = res.get("person") or {}
+    if not isinstance(person, dict) or not person.get("wcaId"):
+        logging.warning(
+            "[smoke] WCA Live record.result.person missing wcaId; person keys: %s",
+            sorted(person.keys()) if isinstance(person, dict) else type(person).__name__,
+        )
+
+
 def get_recent_records_raw() -> list[dict[str, Any]]:
     """Raw ``recentRecords`` entries from WCA Live."""
     data = _graphql(RECENT_RECORDS_QUERY)
     rows = data.get("recentRecords") or []
     if not isinstance(rows, list):
+        logging.warning("[smoke] WCA Live recentRecords is not a list: %s", type(rows).__name__)
         return []
+    _smoke_check_live_records(rows)
     return rows
 
 

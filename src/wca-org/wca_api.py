@@ -41,6 +41,36 @@ def _get_with_429_retry(
     return resp  # unreachable
 
 
+def _smoke_check_competition(c: dict, source: str = "WCA API") -> None:
+    """Log a warning if expected competition fields are absent."""
+    expected = ("id", "name", "start_date", "end_date", "url")
+    missing = [k for k in expected if c.get(k) is None]
+    if missing:
+        logging.warning(
+            "[smoke] %s competition missing fields %s; got keys %s",
+            source, missing, sorted(c.keys()),
+        )
+
+
+def _smoke_check_wcif(wcif: dict, label: str) -> None:
+    """Log warnings if WCIF is missing expected top-level or person-level fields."""
+    expected = ("persons", "schedule", "events")
+    missing = [k for k in expected if k not in wcif]
+    if missing:
+        logging.warning("[smoke] WCIF %s missing sections: %s; got keys: %s", label, missing, sorted(wcif.keys()))
+        return
+    persons = wcif.get("persons") or []
+    if persons:
+        p = persons[0]
+        p_expected = ("wcaId", "name", "registration", "personalBests", "assignments")
+        p_missing = [k for k in p_expected if k not in p]
+        if p_missing:
+            logging.warning(
+                "[smoke] WCIF %s person missing fields: %s; got keys: %s",
+                label, p_missing, sorted(p.keys()),
+            )
+
+
 def get_upcoming_competitions(
     start_date: Optional[datetime] = None,
     end_date: Optional[datetime] = None,
@@ -98,6 +128,8 @@ def get_upcoming_competitions(
         page += 1
         time.sleep(0.5)  # Avoid 429 when fetching multiple pages
 
+    if all_competitions:
+        _smoke_check_competition(all_competitions[0])
     return all_competitions
 
 
@@ -284,7 +316,9 @@ def get_competition_wcif(
             time.sleep(backoff)
             continue
         resp.raise_for_status()
-        return resp.json()
+        wcif = resp.json()
+        _smoke_check_wcif(wcif, label)
+        return wcif
     resp.raise_for_status()  # unreachable; raises on final 429
 
 

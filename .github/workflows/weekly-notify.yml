@@ -2,14 +2,14 @@ name: Weekly psych sheet
 
 on:
   schedule:
-    # Thursday 15:00 UTC — morning Pacific (see daily-records.yml).
-    - cron: "0 15 * * 4"
+    # Thursday 10:00 UTC = 3am PDT; GitHub Actions typically fires 1-2h late → arrives ~5am PDT.
+    - cron: "0 10 * * 4"
   workflow_dispatch:
 
 jobs:
   weekly:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 

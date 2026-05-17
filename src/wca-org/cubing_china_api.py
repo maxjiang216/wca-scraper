@@ -46,12 +46,55 @@ def _get_json(path: str, *, params: Optional[dict] = None) -> dict:
     return data
 
 
+def _smoke_check_comp_list(rows: list[dict]) -> None:
+    """Log warnings if cubing.com competition list schema looks unexpected."""
+    if not rows:
+        return
+    row = rows[0]
+    expected = ("alias", "date", "id", "name", "type")
+    missing = [k for k in expected if k not in row]
+    if missing:
+        logging.warning(
+            "[smoke] cubing.com comp list missing fields %s; sample keys: %s",
+            missing, sorted(row.keys()),
+        )
+    dt = row.get("date") or {}
+    if "from" not in dt or "to" not in dt:
+        logging.warning(
+            "[smoke] cubing.com comp date missing from/to; date keys: %s",
+            sorted(dt.keys()) if isinstance(dt, dict) else type(dt).__name__,
+        )
+
+
+def _smoke_check_competitors(rows: list[dict], alias: str) -> None:
+    """Log warnings if cubing.com competitor list schema looks unexpected."""
+    if not rows:
+        return
+    row = rows[0]
+    expected = ("competitor", "events")
+    missing = [k for k in expected if k not in row]
+    if missing:
+        logging.warning(
+            "[smoke] cubing.com %s competitor missing fields %s; sample keys: %s",
+            alias, missing, sorted(row.keys()),
+        )
+    comp_info = row.get("competitor") or {}
+    if not isinstance(comp_info, dict) or "wcaid" not in comp_info:
+        logging.warning(
+            "[smoke] cubing.com %s competitor.wcaid missing; competitor keys: %s",
+            alias,
+            sorted(comp_info.keys()) if isinstance(comp_info, dict) else type(comp_info).__name__,
+        )
+
+
 def list_wca_competitions(*, year: str = "current") -> list[dict]:
     """List WCA-affiliated competitions from cubing.com (summary rows)."""
     data = _get_json("/competition", params={"year": year, "type": "WCA"})
     rows = data.get("data") or []
     if not isinstance(rows, list):
+        logging.warning("[smoke] cubing.com competition list data is not a list: %s", type(rows).__name__)
         return []
+    _smoke_check_comp_list(rows)
     return rows
 
 
@@ -67,7 +110,9 @@ def get_competitors(alias: str) -> list[dict]:
     data = _get_json(f"/competition/{alias}/competitors")
     rows = data.get("data") or []
     if not isinstance(rows, list):
+        logging.warning("[smoke] cubing.com %s competitors data is not a list: %s", alias, type(rows).__name__)
         return []
+    _smoke_check_competitors(rows, alias)
     return rows
 
 
