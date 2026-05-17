@@ -2,8 +2,8 @@ name: Daily Records Alert
 
 on:
   schedule:
-    # 15:00 UTC ≈ 7am US/Pacific (standard); ≈ 8am during daylight saving.
-    - cron: "0 15 * * *"
+    # 10:00 UTC = 3am PDT (UTC-7); GitHub Actions typically fires 1-2h late → arrives ~5am PDT.
+    - cron: "0 10 * * *"
   workflow_dispatch:
 
 jobs:
