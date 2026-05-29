@@ -283,6 +283,29 @@ def fetch_person_bundle(wca_id: str) -> dict:
     return {}
 
 
+_PERSON_NAME_CACHE: dict[str, str] = {}
+
+
+def get_person_display_name(wca_id: str) -> Optional[str]:
+    """Latin display name for a WCA ID, e.g. ``Yiheng Wang`` from the WCA-stored
+    ``Yiheng Wang (王艺衡)``. Returns None if unknown. Cached per process."""
+    wid = (wca_id or "").strip().upper()
+    if not wid:
+        return None
+    if wid in _PERSON_NAME_CACHE:
+        return _PERSON_NAME_CACHE[wid] or None
+    try:
+        bundle = fetch_person_bundle(wid)
+    except Exception:
+        bundle = {}
+    person = bundle.get("person") or {}
+    raw = (person.get("name") or "").strip()
+    # WCA stores non-Latin names as "Latin Name (本地名)"; keep the Latin part.
+    latin = raw.split("(", 1)[0].strip() if raw else ""
+    _PERSON_NAME_CACHE[wid] = latin
+    return latin or None
+
+
 def get_competition_wcif(
     competition_id: str,
     *,

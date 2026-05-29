@@ -133,6 +133,17 @@ def _overlap(
     return d0 <= window_end and d1 >= window_start
 
 
+def _english_comp_name(api_name: Optional[str], alias: str) -> str:
+    """Prefer an English name. cubing.com returns Chinese names with no English
+    variant, so fall back to the alias (e.g. ``Quanzhou-Summer-2026`` →
+    ``Quanzhou Summer 2026``) when the API name has non-ASCII characters."""
+    if api_name and api_name.isascii() and api_name.strip():
+        return api_name.strip()
+    if alias:
+        return alias.replace("-", " ").strip()
+    return api_name or alias
+
+
 def normalize_event_id(e: Any) -> str:
     """Cubing API mixes int and str event ids (333 vs '333bf')."""
     if e is None:
@@ -195,7 +206,7 @@ def normalize_cubing_competition_for_notifier(
 
     return {
         "id": wca_comp_id or f"cubing:{alias}",
-        "name": detail.get("name") or alias,
+        "name": _english_comp_name(detail.get("name"), alias),
         "start_date": start_d,
         "end_date": end_d,
         "country_iso2": "CN",
@@ -217,7 +228,10 @@ def list_cubing_comps_overlapping_window(
     Cubing competitions overlapping [window_start, window_end].
 
     Returns list of tuples (alias, detail_dict, normalized_comp_dict) for comps not skipped.
-    ``wca_competition_ids_to_skip`` contains WCA IDs already fetched from the WCA API.
+    ``wca_competition_ids_to_skip`` contains WCA comp IDs already covered on the WCA side
+    (i.e. that yielded watched competitors there). It must NOT contain every WCA comp seen:
+    many Chinese comps exist on WCA with no registrations (competitors register on cubing.com),
+    so skipping by mere existence would drop them.
     """
     try:
         summaries = list_wca_competitions(year="current")

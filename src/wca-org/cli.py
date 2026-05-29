@@ -51,8 +51,10 @@ def main() -> None:
     records_p.add_argument(
         "--ended-days",
         type=int,
-        default=2,
-        help="Fetch results for competitions that ended in this many days (default: 2)",
+        default=10,
+        help="Fetch results for competitions that ended in this many days (default: 10). "
+        "Wide by design: WCA result uploads (esp. Chinese comps) lag several days; "
+        "already-seen results are deduped, so re-scanning costs only API calls.",
     )
     records_p.add_argument(
         "--state-file",
