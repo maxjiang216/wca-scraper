@@ -193,7 +193,7 @@ def collect_new_competition_result_rows(
     events: dict[str, WatchEventConfig],
     cfg: WatchListConfig,
     state: dict[str, Any],
-    ended_days: int = 2,
+    ended_days: int = 10,
     delay_s: float = 0.4,
 ) -> list[dict[str, Any]]:
     ids_list = state.setdefault("seen_rest_result_ids", [])
@@ -280,7 +280,7 @@ def run_records_check(
     cfg: WatchListConfig,
     state_path: Path,
     update_state: bool = True,
-    ended_days: int = 2,
+    ended_days: int = 10,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     state_disk = load_records_state(state_path)
     work = copy.deepcopy(state_disk) if not update_state else state_disk

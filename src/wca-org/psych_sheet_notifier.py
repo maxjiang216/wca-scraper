@@ -22,6 +22,7 @@ from .notify import format_psych_sheet_email, send_email
 from .wca_api import (
     get_competition_wcif,
     get_competitor_schedule,
+    get_person_display_name,
     get_upcoming_competitions,
     get_watched_competitors_in_psych_sheet,
 )
@@ -90,14 +91,42 @@ def gather_psych_sheet_results(
         countries = {c.strip().upper() for c in country_filter.split(",")}
         competitions = [c for c in competitions if c.get("country_iso2", "").upper() in countries]
 
-    wca_ids_seen: set[str] = {c["id"] for c in competitions if c.get("id")}
     results: list[dict] = []
     start_time = time.perf_counter()
-    total = len(competitions)
 
+    # Pre-fetch cubing.com comps (if enabled) BEFORE the WCA loop so they take
+    # priority: many Chinese comps exist on WCA but carry no registrations there
+    # (competitors register on cubing.com). For any comp present on both systems
+    # we skip the WCA side and use cubing.com's richer registration data.
+    cubing_comps: list[tuple[str, dict, dict]] = []
+    cubing_covered_wca_ids: set[str] = set()
+    if cubing_china:
+        ws = start.date()
+        we = end.date()
+        logging.info("Cubing China: scanning comps overlapping %s – %s", ws, we)
+
+        def _cc_log(_i: int, alias: str, cname: str) -> None:
+            logging.info("  Cubing: %s (%s)", cname, alias)
+
+        cubing_comps = list_cubing_comps_overlapping_window(
+            window_start=ws,
+            window_end=we,
+            wca_competition_ids_to_skip=set(),  # take everything; we prioritize cubing
+            rate_limit_delay_s=rate_limit_delay_s,
+            on_progress=_cc_log,
+        )
+        for _alias, detail, _norm in cubing_comps:
+            wid = (detail.get("wca_competition_id") or "").strip()
+            if wid:
+                cubing_covered_wca_ids.add(wid)
+
+    total = len(competitions)
     logging.info("Found %d WCA competition(s) to check", total)
     for i, comp in enumerate(competitions, 1):
         comp_id = comp["id"]
+        if comp_id in cubing_covered_wca_ids:
+            logging.info("  Skip %s (covered by cubing.com)", comp_id)
+            continue
         comp_name = comp.get("name", comp_id)
         comp_url = comp.get("url", f"https://www.worldcubeassociation.org/competitions/{comp_id}")
         comp_start = comp.get("start_date", "")
@@ -144,20 +173,7 @@ def gather_psych_sheet_results(
             })
 
     if cubing_china:
-        ws = start.date()
-        we = end.date()
-        logging.info("Cubing China: scanning comps overlapping %s – %s", ws, we)
-
-        def _cc_log(_i: int, alias: str, cname: str) -> None:
-            logging.info("  Cubing: %s (%s)", cname, alias)
-
-        for alias, _detail, norm in list_cubing_comps_overlapping_window(
-            window_start=ws,
-            window_end=we,
-            wca_competition_ids_to_skip=wca_ids_seen,
-            rate_limit_delay_s=rate_limit_delay_s,
-            on_progress=_cc_log,
-        ):
+        for alias, _detail, norm in cubing_comps:
             try:
                 matches = cubing_matches_for_watch_list(
                     alias,
@@ -173,6 +189,10 @@ def gather_psych_sheet_results(
             logging.info("  ✓ cubing %s: %d watched competitor(s)", comp_name, len(matches))
             for m in matches:
                 m["schedule"] = []
+                # cubing.com gives the local-script name; prefer the WCA Latin name.
+                latin = get_person_display_name(m.get("wcaId", ""))
+                if latin:
+                    m["name"] = latin
             comp_start = norm.get("start_date", "")
             comp_end = norm.get("end_date", "")
             date_str = comp_start if comp_start == comp_end else f"{comp_start} – {comp_end}"
