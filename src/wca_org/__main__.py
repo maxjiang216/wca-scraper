@@ -1,4 +1,4 @@
-"""python -m wca_org"""
+"""python -m wca_org."""
 
 from .cli import main
 

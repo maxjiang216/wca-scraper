@@ -2,10 +2,10 @@
 
 
 def mbld_decode(encoded: int) -> tuple[int, int, int] | None:
-    """
-    Decode WCA MBLD encoded result to (solved, attempted, time_seconds).
+    """Decode WCA MBLD encoded result to (solved, attempted, time_seconds).
 
-    Encoding: (99 - (solved - missed)) * 10_000_000 + time_seconds * 100 + missed
+    Encoding:
+    (99 - (solved - missed)) * 10_000_000 + time_seconds * 100 + missed
     where missed = attempted - solved.
     """
     if encoded is None or encoded <= 0 or encoded >= 1_000_000_000:

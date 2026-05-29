@@ -11,6 +11,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 3. **Records alert** (`wca records`) — Daily digest of WCA Live records and recent competition results (filtered by configurable OR rules per event)
 4. **Top competitors report** (`wca report`) — Markdown/plain report of world-ranked registrants at upcoming competitions
 
+## Code Standards
+
+This repo uses [standard-linter](https://github.com/maxjiang216/standard-linter)
+(ruff + mypy strict). **Run `bash scripts/lint.sh` before every commit**; use
+`bash scripts/lint.sh --fix` first for auto-fixable formatting, then fix the rest
+by hand. CI enforces the same via `.github/workflows/code-standards.yml` (calls the
+reusable `standards.yml`); enabled languages are `python` and `bash`.
+
+- Configs live in `.code-standards/` — **gitignored, fetched on demand**. If absent,
+  run `curl -fsSL https://raw.githubusercontent.com/maxjiang216/standard-linter/main/scripts/bootstrap.sh | bash` (or `bash scripts/lint.sh` auto-fetches).
+- Python: 80-col, double quotes, Google-style docstrings required on public
+  modules/classes/functions, full type annotations, mypy `strict`.
+- The package dir is `src/wca_org/` (underscore — must be a valid module name for
+  mypy/tooling); imported as `wca_org` via `[tool.setuptools] package-dir = {"" = "src"}`.
+- `requests`/`yaml` imports carry `# type: ignore[import-untyped]` because CI installs
+  only `ruff`+`mypy` (no type stubs); do not remove them.
+
 ## Setup & Common Commands
 
 ### Initial Setup
@@ -238,3 +255,7 @@ No external testing frameworks; no database; no async code.
 8. **Smoke tests:** All three API modules log `[smoke]` warnings when expected fields are missing from API responses. Check GitHub Actions logs for these to diagnose schema changes.
 
 9. **Email expandable blocks:** Psych sheet uses `<details>/<summary>` for collapsible rows. Gmail web supports this; Outlook desktop does not (renders expanded). The `<summary>` shows: bold competitor names · competition link (year stripped from name) · events · dates.
+
+10. **Cubing China takes priority over WCA for shared comps:** Most Chinese comps exist on *both* cubing.com and WCA, but the WCA WCIF has **zero registrations** (competitors register on cubing.com). `gather_psych_sheet_results` pre-fetches cubing comps first, builds the set of their `wca_competition_id`s, and **skips those comps in the WCA loop** so cubing.com's registration data wins. Do NOT dedup cubing comps by "exists on WCA" — that drops them entirely (they'd have no WCA registrations to show). cubing.com competitor names are local-script (e.g. 王艺衡); `psych_sheet_notifier` replaces them with the WCA Latin name via `wca_api.get_person_display_name()` (cached). English comp names come from the alias (`Quanzhou-Summer-2026` → "Quanzhou Summer 2026") since cubing.com's `name` field is Chinese with no English variant.
+
+11. **No cubing.com results API:** cubing.com exposes competition metadata + registration only — all `/results`, `/podiums`, `/live` etc. endpoints 404 (`live` in the detail is just a `1` flag). Most Chinese comps are NOT on WCA Live either (they use in-house scoretaking). The only structured source for their results is the official WCA REST `/competitions/{id}/results`, which lags several days. Hence `records` defaults to `--ended-days 10` (was 2): a wide re-scan window so late uploads are caught. Re-scanning is safe — `seen_rest_result_ids` dedups, so the only cost is API calls (daily-records.yml `timeout-minutes: 15`).

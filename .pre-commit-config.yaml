@@ -1,0 +1,90 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.11.12
+    hooks:
+      - id: ruff-format
+        args: ["--config", ".code-standards/python/ruff.toml"]
+      - id: ruff
+        args: ["--config", ".code-standards/python/ruff.toml", "--fix"]
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.15.0
+    hooks:
+      - id: mypy
+        args: ["--config-file", ".code-standards/python/mypy.ini"]
+        pass_filenames: false
+        files: "\\.py$"
+
+  - repo: https://github.com/pre-commit/mirrors-clang-format
+    rev: v19.1.7
+    hooks:
+      - id: clang-format
+        args: ["--style=file:.code-standards/cpp/.clang-format"]
+        files: "\\.(c|cc|cpp|cxx|h|hh|hpp|hxx)$"
+
+  - repo: https://github.com/pre-commit/mirrors-prettier
+    rev: v4.0.0-alpha.8
+    hooks:
+      - id: prettier
+        args: ["--config", ".code-standards/javascript/prettier.config.cjs", "--check"]
+        files: "\\.(js|jsx|ts|tsx|json|css|html|md|yml|yaml)$"
+
+  - repo: local
+    hooks:
+      - id: clang-tidy-changed
+        name: clang-tidy changed C++ files
+        entry: bash -c 'compile_db=""; [ -f compile_commands.json ] && compile_db=".";
+          [ -f build/compile_commands.json ] && compile_db="build";
+          [ -z "$compile_db" ] && echo "No compile_commands.json; skipping clang-tidy" && exit 0;
+          clang-tidy "$@" -p "$compile_db" --config-file .code-standards/cpp/.clang-tidy'
+        language: system
+        files: "\\.(c|cc|cpp|cxx)$"
+      - id: cppcheck
+        name: cppcheck
+        entry: cppcheck --enable=all --inline-suppr --error-exitcode=1
+          --suppress=unmatchedSuppression
+          --suppressions-list=.code-standards/cpp/cppcheck.suppressions
+        language: system
+        files: "\\.(c|cc|cpp|cxx|h|hh|hpp|hxx)$"
+      - id: rustfmt
+        name: rustfmt
+        entry: bash -c 'cargo fmt --all -- --check --config-path .code-standards/rust/rustfmt.toml'
+        language: system
+        pass_filenames: false
+        files: "\\.rs$"
+      - id: clippy
+        name: clippy
+        entry: bash -c 'cp .code-standards/rust/clippy.toml clippy.toml &&
+          cargo clippy --all-targets --all-features --
+          -D warnings -W clippy::pedantic -W clippy::nursery
+          -A clippy::module_name_repetitions'
+        language: system
+        pass_filenames: false
+        files: "\\.rs$"
+      - id: eslint
+        name: eslint
+        entry: npx eslint --config .code-standards/javascript/eslint.config.mjs
+        language: system
+        files: "\\.(js|jsx|ts|tsx)$"
+      - id: tsc
+        name: typescript
+        entry: npx tsc --noEmit --project .code-standards/javascript/tsconfig.lint.json
+        language: system
+        pass_filenames: false
+        files: "\\.(ts|tsx)$"
+      - id: gofmt
+        name: gofmt
+        entry: bash -c 'files="$(gofmt -l "$@")"; [ -z "$files" ] || { echo "$files"; exit 1; }' --
+        language: system
+        files: "\\.go$"
+      - id: golangci-lint
+        name: golangci-lint
+        entry: golangci-lint run --config .code-standards/go/.golangci.yml
+        language: system
+        pass_filenames: false
+        files: "\\.go$"
+      - id: shellcheck
+        name: shellcheck
+        entry: shellcheck --shell=bash --enable=all --exclude=SC2312
+        language: system
+        files: "\\.(sh|bash)$"

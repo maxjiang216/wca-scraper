@@ -11,16 +11,21 @@ from pathlib import Path
 from typing import Any
 
 from .results_format import mbld_solved_count
+from .watch_list import (
+    WatchEventConfig,
+    WatchListConfig,
+    continental_tags_for_event,
+)
 from .wca_api import (
     get_competition_results,
     get_competitions_ended_within_days,
     get_iso2_to_continental_record_tag,
 )
 from .wca_live_api import get_recent_records_raw, normalize_live_record
-from .watch_list import WatchEventConfig, WatchListConfig, continental_tags_for_event
 
 
 def load_records_state(path: Path) -> dict[str, Any]:
+    """Load deduplication state from disk, returning empty state if absent."""
     if not path.exists():
         return {"seen_live_ids": [], "seen_rest_result_ids": []}
     try:
@@ -37,12 +42,15 @@ def load_records_state(path: Path) -> dict[str, Any]:
 
 
 def save_records_state(path: Path, state: dict[str, Any]) -> None:
-    path.write_text(json.dumps(state, indent=0, sort_keys=True), encoding="utf-8")
+    """Write deduplication state to disk as JSON."""
+    path.write_text(
+        json.dumps(state, indent=0, sort_keys=True), encoding="utf-8"
+    )
 
 
-def _safe_pos_int(val: object) -> int | None:
+def _safe_pos_int(val: Any) -> int | None:
     try:
-        i = int(val)  # type: ignore[arg-type]
+        i = int(val)
         return i if i > 0 else None
     except (TypeError, ValueError):
         return None
@@ -58,7 +66,11 @@ def _rest_row_matches_or(
     ec: WatchEventConfig,
     cfg: WatchListConfig,
 ) -> bool:
-    """OR: WR, configured continental tags on row, sub time (non-mbf), MBLD sup (333mbf)."""
+    """Return True if a results row matches any configured OR rule.
+
+    Checks WR, configured continental tags on the row, sub time
+    (non-mbf), and MBLD sup points (333mbf).
+    """
     eid = row.get("event_id") or ""
     rs = (row.get("regional_single_record") or "").strip().upper()
     ra = (row.get("regional_average_record") or "").strip().upper()
@@ -82,9 +94,17 @@ def _rest_row_matches_or(
         return False
 
     if eid != "333mbf":
-        if ec.sub_single_cs is not None and best is not None and best < ec.sub_single_cs:
+        if (
+            ec.sub_single_cs is not None
+            and best is not None
+            and best < ec.sub_single_cs
+        ):
             return True
-        if ec.sub_average_cs is not None and avg is not None and avg < ec.sub_average_cs:
+        if (
+            ec.sub_average_cs is not None
+            and avg is not None
+            and avg < ec.sub_average_cs
+        ):
             return True
 
     return False
@@ -106,6 +126,45 @@ def _live_result_centiseconds(norm: dict[str, Any], typ: str) -> int | None:
         return None
 
 
+def _live_cr_tag_matches(
+    norm: dict[str, Any],
+    *,
+    tag: str,
+    allowed: set[str],
+    iso2_to_cr: dict[str, str],
+) -> bool:
+    """Return True if a CR-tagged live row maps to an allowed CR tag."""
+    if tag != "CR" or not allowed:
+        return False
+    iso2 = (norm.get("country_iso2") or "").strip().upper()
+    cr_tag = iso2_to_cr.get(iso2)
+    return bool(cr_tag and cr_tag in allowed)
+
+
+def _live_mbld_matches(
+    norm: dict[str, Any], typ: str, ec: WatchEventConfig
+) -> bool:
+    """Return True if a 333mbf live row meets the MBLD sup-points rule."""
+    if ec.mbf_sup_points is None:
+        return False
+    raw = _live_result_centiseconds(norm, typ)
+    if raw is None:
+        return False
+    sc = mbld_solved_count(raw)
+    return sc is not None and sc >= ec.mbf_sup_points
+
+
+def _live_sub_time_matches(
+    norm: dict[str, Any], typ: str, ec: WatchEventConfig
+) -> bool:
+    """Return True if a non-mbf live row is under the sub-time cap."""
+    cap = ec.sub_average_cs if typ == "average" else ec.sub_single_cs
+    if cap is None:
+        return False
+    val = _live_result_centiseconds(norm, typ)
+    return val is not None and val < cap
+
+
 def live_row_matches_or(
     norm: dict[str, Any],
     *,
@@ -113,6 +172,7 @@ def live_row_matches_or(
     cfg: WatchListConfig,
     iso2_to_cr: dict[str, str],
 ) -> bool:
+    """Return True if a WCA Live row matches any configured OR rule."""
     eid = norm.get("event_id") or ""
     tag = (norm.get("tag") or "").upper()
     typ = (norm.get("type") or "single").lower()
@@ -123,27 +183,15 @@ def live_row_matches_or(
         return True
 
     allowed = _allowed_cr_tags(ec, cfg)
-    if tag == "CR" and allowed:
-        iso2 = (norm.get("country_iso2") or "").strip().upper()
-        cr_tag = iso2_to_cr.get(iso2)
-        if cr_tag and cr_tag in allowed:
-            return True
+    if _live_cr_tag_matches(
+        norm, tag=tag, allowed=allowed, iso2_to_cr=iso2_to_cr
+    ):
+        return True
 
-    if eid == "333mbf" and ec.mbf_sup_points is not None:
-        raw = _live_result_centiseconds(norm, typ)
-        if raw is not None:
-            sc = mbld_solved_count(raw)
-            if sc is not None and sc >= ec.mbf_sup_points:
-                return True
+    if eid == "333mbf":
+        return _live_mbld_matches(norm, typ, ec)
 
-    if eid != "333mbf":
-        cap = ec.sub_average_cs if typ == "average" else ec.sub_single_cs
-        if cap is not None:
-            val = _live_result_centiseconds(norm, typ)
-            if val is not None and val < cap:
-                return True
-
-    return False
+    return _live_sub_time_matches(norm, typ, ec)
 
 
 def _normalized_live_rows_for_configured_events(
@@ -167,6 +215,7 @@ def collect_new_live_records(
     state: dict[str, Any],
     normalized_rows: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
+    """Return new, unseen WCA Live record rows matching configured rules."""
     iso2_to_cr = get_iso2_to_continental_record_tag()
     seen = set(state.get("seen_live_ids") or [])
     rows = (
@@ -188,14 +237,8 @@ def collect_new_live_records(
     return out
 
 
-def collect_new_competition_result_rows(
-    *,
-    events: dict[str, WatchEventConfig],
-    cfg: WatchListConfig,
-    state: dict[str, Any],
-    ended_days: int = 2,
-    delay_s: float = 0.4,
-) -> list[dict[str, Any]]:
+def _seen_rest_result_ids(state: dict[str, Any]) -> set[int]:
+    """Return the set of previously seen competition result ids from state."""
     ids_list = state.setdefault("seen_rest_result_ids", [])
     if not isinstance(ids_list, list):
         state["seen_rest_result_ids"] = []
@@ -206,15 +249,90 @@ def collect_new_competition_result_rows(
             seen.add(int(x))
         except (TypeError, ValueError):
             continue
+    return seen
+
+
+def _rest_alert_from_row(
+    row: dict[str, Any], *, eid: str, rid_i: int, cid: str
+) -> dict[str, Any]:
+    """Build an alert dict from a matching competition results row."""
+    return {
+        "source": "competition",
+        "result_id": rid_i,
+        "wca_id": (row.get("wca_id") or "").strip().upper(),
+        "name": row.get("name") or "",
+        "country_iso2": row.get("country_iso2"),
+        "event_id": eid,
+        "competition_id": row.get("competition_id") or cid,
+        "round_type_id": row.get("round_type_id"),
+        "best": row.get("best"),
+        "average": row.get("average"),
+        "attempts": row.get("attempts"),
+        "pos": row.get("pos"),
+        "regional_single_record": row.get("regional_single_record"),
+        "regional_average_record": row.get("regional_average_record"),
+    }
+
+
+def _process_competition_result_rows(
+    rows: list[dict[str, Any]],
+    *,
+    cid: str,
+    events: dict[str, WatchEventConfig],
+    cfg: WatchListConfig,
+    seen: set[int],
+    bootstrap: bool,
+    new_ids: list[int],
+    alerts: list[dict[str, Any]],
+) -> None:
+    """Scan one competition's rows, recording ids and matching alerts."""
+    for row in rows:
+        rid = row.get("id")
+        if rid is None:
+            continue
+        try:
+            rid_i = int(rid)
+        except (TypeError, ValueError):
+            continue
+        eid = row.get("event_id") or ""
+        if eid not in events:
+            continue
+        new_ids.append(rid_i)
+        ec = events[eid]
+        if not _rest_row_matches_or(row, ec=ec, cfg=cfg):
+            continue
+        if bootstrap:
+            continue
+        if rid_i in seen:
+            continue
+        alerts.append(_rest_alert_from_row(row, eid=eid, rid_i=rid_i, cid=cid))
+
+
+def collect_new_competition_result_rows(
+    *,
+    events: dict[str, WatchEventConfig],
+    cfg: WatchListConfig,
+    state: dict[str, Any],
+    ended_days: int = 10,
+    delay_s: float = 0.4,
+) -> list[dict[str, Any]]:
+    """Return new, unseen competition result rows matching configured rules."""
+    seen = _seen_rest_result_ids(state)
 
     today_d = date.today()
     ended = get_competitions_ended_within_days(
         days=ended_days,
         today=today_d,
-        on_progress=lambda p, n: logging.info("  Past-comps page %d: %d match(es)", p, n),
+        on_progress=lambda p, n: logging.info(
+            "  Past-comps page %d: %d match(es)", p, n
+        ),
     )
     comp_ids = [c["id"] for c in ended if c.get("id")]
-    logging.info("%d competition(s) in last %d day(s) for results scan", len(comp_ids), ended_days)
+    logging.info(
+        "%d competition(s) in last %d day(s) for results scan",
+        len(comp_ids),
+        ended_days,
+    )
 
     bootstrap = len(seen) == 0
     alerts: list[dict[str, Any]] = []
@@ -228,47 +346,26 @@ def collect_new_competition_result_rows(
             time.sleep(delay_s)
             continue
         time.sleep(delay_s)
-        for row in rows:
-            rid = row.get("id")
-            if rid is None:
-                continue
-            try:
-                rid_i = int(rid)
-            except (TypeError, ValueError):
-                continue
-            eid = row.get("event_id") or ""
-            if eid not in events:
-                continue
-            new_ids.append(rid_i)
-            ec = events[eid]
-            if not _rest_row_matches_or(row, ec=ec, cfg=cfg):
-                continue
-            if bootstrap:
-                continue
-            if rid_i in seen:
-                continue
-            alerts.append({
-                "source": "competition",
-                "result_id": rid_i,
-                "wca_id": (row.get("wca_id") or "").strip().upper(),
-                "name": row.get("name") or "",
-                "country_iso2": row.get("country_iso2"),
-                "event_id": eid,
-                "competition_id": row.get("competition_id") or cid,
-                "round_type_id": row.get("round_type_id"),
-                "best": row.get("best"),
-                "average": row.get("average"),
-                "attempts": row.get("attempts"),
-                "pos": row.get("pos"),
-                "regional_single_record": row.get("regional_single_record"),
-                "regional_average_record": row.get("regional_average_record"),
-            })
+        _process_competition_result_rows(
+            rows,
+            cid=cid,
+            events=events,
+            cfg=cfg,
+            seen=seen,
+            bootstrap=bootstrap,
+            new_ids=new_ids,
+            alerts=alerts,
+        )
 
     merged = seen | set(new_ids)
     state["seen_rest_result_ids"] = sorted(merged)[-120_000:]
 
     if bootstrap:
-        logging.info("Bootstrap: stored %d competition result id(s); no rest-email this run", len(merged))
+        logging.info(
+            "Bootstrap: stored %d competition result id(s); "
+            "no rest-email this run",
+            len(merged),
+        )
         return []
 
     return alerts
@@ -280,13 +377,16 @@ def run_records_check(
     cfg: WatchListConfig,
     state_path: Path,
     update_state: bool = True,
-    ended_days: int = 2,
+    ended_days: int = 10,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Run the records check, returning new live and competition rows."""
     state_disk = load_records_state(state_path)
     work = copy.deepcopy(state_disk) if not update_state else state_disk
 
     norm = _normalized_live_rows_for_configured_events(events)
-    new_live = collect_new_live_records(events=events, cfg=cfg, state=work, normalized_rows=norm)
+    new_live = collect_new_live_records(
+        events=events, cfg=cfg, state=work, normalized_rows=norm
+    )
     rest_rows = collect_new_competition_result_rows(
         events=events,
         cfg=cfg,

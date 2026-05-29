@@ -21,4 +21,4 @@ wca = "wca_org.cli:main"
 packages = ["wca_org"]
 
 [tool.setuptools.package-dir]
-"wca_org" = "src/wca-org"
+"" = "src"
