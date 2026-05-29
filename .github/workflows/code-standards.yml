@@ -1,0 +1,20 @@
+name: Code Standards
+
+# Set each language flag to true/false based on what this repo uses.
+# Pin @main to a tag like @v1 once the repo is stable.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  standards:
+    uses: maxjiang216/standard-linter/.github/workflows/standards.yml@main
+    with:
+      python: true
+      cpp: false
+      rust: false
+      javascript: false
+      go: false
+      bash: true

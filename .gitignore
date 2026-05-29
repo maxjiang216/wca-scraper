@@ -10,3 +10,6 @@ wca_weekly_dry_run.txt
 wca_records_dry_run.txt
 records_state.json
 *.egg-info/
+
+# standard-linter (fetched on demand)
+.code-standards/

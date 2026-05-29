@@ -6,15 +6,17 @@ import csv
 import io
 import logging
 import zipfile
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Any
 
-import requests
+import requests  # type: ignore[import-untyped]
 
 WCA_EXPORT_PUBLIC = "https://www.worldcubeassociation.org/api/v0/export/public"
 
 
-def get_export_metadata() -> dict:
+def get_export_metadata() -> dict[str, Any]:
+    """Fetch the WCA public export metadata as a dict."""
     r = requests.get(WCA_EXPORT_PUBLIC, timeout=60)
     r.raise_for_status()
     data = r.json()
@@ -36,7 +38,7 @@ def download_export_zip(url: str, dest: Path) -> None:
     logging.info("Wrote %s", dest)
 
 
-def _find_member(zf: zipfile.ZipFile, suffix: str) -> Optional[str]:
+def _find_member(zf: zipfile.ZipFile, suffix: str) -> str | None:
     for name in zf.namelist():
         if name.endswith(suffix) and not name.startswith("__"):
             return name
@@ -47,8 +49,7 @@ def collect_person_ids_for_wcaids(
     zip_path: Path,
     watched_wca_ids: set[str],
 ) -> set[str]:
-    """
-    Internal WCA ``person_id`` values (as strings) for the given WCA IDs.
+    """Internal WCA ``person_id`` values (as strings) for the given WCA IDs.
 
     Streams ``WCA_export_Persons.tsv`` (or same suffix) inside the export ZIP.
     """
@@ -77,7 +78,9 @@ def collect_person_ids_for_wcaids(
                     pid = (row.get(id_col) or "").strip()
                     if pid:
                         out.add(pid)
-    logging.info("Matched %d person row(s) for %d WCA ID(s)", len(out), len(watched))
+    logging.info(
+        "Matched %d person row(s) for %d WCA ID(s)", len(out), len(watched)
+    )
     return out
 
 

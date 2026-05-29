@@ -1,4 +1,7 @@
-"""Watch list file (YAML/JSON): psych ``people`` + per-event **daily** OR rules."""
+"""Watch list file (YAML/JSON) parsing.
+
+Psych ``people`` plus per-event **daily** OR rules.
+"""
 
 from __future__ import annotations
 
@@ -6,37 +9,44 @@ import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 
 @dataclass
 class WatchEventConfig:
-    """
-    - **people** — WCA IDs included in **psych sheet** emails only (``notify`` / ``weekly``).
-    - **Daily** digest (``wca records``) uses **OR** rules (default: **world records only**):
+    """Per-event watch config: psych ``people`` plus daily OR rules.
+
+    - **people** — WCA IDs included in **psych sheet** emails only
+      (``notify`` / ``weekly``).
+    - **Daily** digest (``wca records``) uses **OR** rules (default:
+      **world records only**):
 
       - **WR** always considered.
-      - **continental_records** — if set non-empty, rows whose ``regional_*_record``
-        matches one of these tags (e.g. **NAR**, **ER**). Omit or leave unset for no CR
-        filtering (not inherited from ``config``).
-      - **sub_single_cs** / **sub_average_cs** — any competitor: single or average **strictly
-        under** this time (centiseconds); ignored for **333mbf**.
-      - **mbf_sup_points** — for **333mbf** only: notify when decoded MBLD **solved count**
-        is **≥** this value (``sup``, not sub).
+      - **continental_records** — if set non-empty, rows whose
+        ``regional_*_record`` matches one of these tags (e.g. **NAR**,
+        **ER**). Omit or leave unset for no CR filtering (not inherited
+        from ``config``).
+      - **sub_single_cs** / **sub_average_cs** — any competitor: single or
+        average **strictly under** this time (centiseconds); ignored for
+        **333mbf**.
+      - **mbf_sup_points** — for **333mbf** only: notify when decoded MBLD
+        **solved count** is **≥** this value (``sup``, not sub).
 
-    YAML: ``sub_single`` / ``sub_average`` / ``*_seconds``; ``sup_points`` / ``mbf_sup`` / ``sup_mbf``.
-    Legacy: ``roundup_all`` / flat list ⇒ ``people``. ``daily:``, ``weekly_sub_pb:`` merged into thresholds.
+    YAML: ``sub_single`` / ``sub_average`` / ``*_seconds``; ``sup_points`` /
+    ``mbf_sup`` / ``sup_mbf``. Legacy: ``roundup_all`` / flat list ⇒
+    ``people``. ``daily:``, ``weekly_sub_pb:`` merged into thresholds.
     """
 
     people: set[str] = field(default_factory=set)
-    continental_records: Optional[list[str]] = None
-    sub_single_cs: Optional[int] = None
-    sub_average_cs: Optional[int] = None
-    mbf_sup_points: Optional[int] = None
+    continental_records: list[str] | None = None
+    sub_single_cs: int | None = None
+    sub_average_cs: int | None = None
+    mbf_sup_points: int | None = None
 
     def all_watched(self) -> set[str]:
+        """Return the set of WCA IDs watched for this event."""
         return set(self.people)
 
 
@@ -58,7 +68,7 @@ def _parse_id_set(val: Any) -> set[str]:
     return {str(val).strip().upper()}
 
 
-def _parse_sub_centiseconds(d: dict, base_key: str) -> Optional[int]:
+def _parse_sub_centiseconds(d: dict[str, Any], base_key: str) -> int | None:
     for key, mult in (
         (f"{base_key}_cs", 1),
         (base_key, 1),
@@ -71,7 +81,7 @@ def _parse_sub_centiseconds(d: dict, base_key: str) -> Optional[int]:
         try:
             if mult == 100:
                 f = float(v)
-                i = int(round(f * 100))
+                i = round(f * 100)
             else:
                 i = int(v)
             return i if i > 0 else None
@@ -80,7 +90,7 @@ def _parse_sub_centiseconds(d: dict, base_key: str) -> Optional[int]:
     return None
 
 
-def _parse_continental_records(val: Any) -> Optional[list[str]]:
+def _parse_continental_records(val: Any) -> list[str] | None:
     if val is None:
         return None
     if isinstance(val, list):
@@ -89,7 +99,7 @@ def _parse_continental_records(val: Any) -> Optional[list[str]]:
     return [s] if s else []
 
 
-def _parse_sup_points(*dicts: dict) -> Optional[int]:
+def _parse_sup_points(*dicts: Any) -> int | None:
     for d in dicts:
         if not isinstance(d, dict):
             continue
@@ -104,7 +114,7 @@ def _parse_sup_points(*dicts: dict) -> Optional[int]:
     return None
 
 
-def _merge_sub_cs(*dicts: dict) -> tuple[Optional[int], Optional[int]]:
+def _merge_sub_cs(*dicts: Any) -> tuple[int | None, int | None]:
     ss, sa = None, None
     for d in dicts:
         if not isinstance(d, dict):
@@ -137,13 +147,15 @@ def _parse_event_config(event_key: str, raw: Any) -> WatchEventConfig:
     people |= _parse_id_set(raw.get("roundup_all"))
     people |= _parse_id_set(raw.get("all_results"))
 
-    continental_records: Optional[list[str]] = None
+    continental_records: list[str] | None = None
     for key in ("continental_records", "cr", "crs"):
         if key in raw:
             continental_records = _parse_continental_records(raw.get(key))
             break
     if continental_records is None and "continental_records" in daily_d:
-        continental_records = _parse_continental_records(daily_d.get("continental_records"))
+        continental_records = _parse_continental_records(
+            daily_d.get("continental_records")
+        )
 
     ss, sa = _merge_sub_cs(raw, daily_d, sub_pb_d)
     mbf_sup = _parse_sup_points(raw, daily_d, sub_pb_d)
@@ -157,28 +169,33 @@ def _parse_event_config(event_key: str, raw: Any) -> WatchEventConfig:
     )
 
 
-def flat_per_event_watches(events: dict[str, WatchEventConfig]) -> dict[str, set[str]]:
+def flat_per_event_watches(
+    events: dict[str, WatchEventConfig],
+) -> dict[str, set[str]]:
     """event_id → ``people`` for psych sheet matching."""
     return {eid: ec.all_watched() for eid, ec in events.items()}
 
 
 def union_all_wca_ids(events: dict[str, WatchEventConfig]) -> set[str]:
+    """Return the union of watched WCA IDs across all events."""
     return {w for ec in events.values() for w in ec.all_watched()}
 
 
-def load_watch_list_document(path: Path) -> tuple[WatchListConfig, dict[str, WatchEventConfig]]:
+def load_watch_list_document(
+    path: Path,
+) -> tuple[WatchListConfig, dict[str, WatchEventConfig]]:
+    """Parse a watch list file into config and per-event configs."""
     if not path.exists():
         return WatchListConfig(), {}
 
     text = path.read_text(encoding="utf-8")
     suffix = path.suffix.lower()
-    if suffix == ".json":
-        raw = json.loads(text)
-    else:
-        raw = yaml.safe_load(text)
+    raw = json.loads(text) if suffix == ".json" else yaml.safe_load(text)
 
     if not isinstance(raw, dict):
-        logging.error("Watch list root must be a mapping (YAML object): %s", path)
+        logging.error(
+            "Watch list root must be a mapping (YAML object): %s", path
+        )
         return WatchListConfig(), {}
 
     config_data = raw.get("config") or {}
@@ -211,11 +228,10 @@ def continental_tags_for_event(
     ec: WatchEventConfig,
     cfg: WatchListConfig,
 ) -> set[str]:
-    """
-    Continental record tags that trigger a **CR** match for this event.
+    """Continental record tags that trigger a **CR** match for this event.
 
-    ``None`` or ``[]`` → **no** CR (default daily behavior is WR-only unless you add subs
-    or explicit CR lists). Non-empty list → only those tags.
+    ``None`` or ``[]`` → **no** CR (default daily behavior is WR-only unless
+    you add subs or explicit CR lists). Non-empty list → only those tags.
     """
     del cfg  # unused; no inheritance — explicit per-event list only
     if not ec.continental_records:

@@ -11,6 +11,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 3. **Records alert** (`wca records`) — Daily digest of WCA Live records and recent competition results (filtered by configurable OR rules per event)
 4. **Top competitors report** (`wca report`) — Markdown/plain report of world-ranked registrants at upcoming competitions
 
+## Code Standards
+
+This repo uses [standard-linter](https://github.com/maxjiang216/standard-linter)
+(ruff + mypy strict). **Run `bash scripts/lint.sh` before every commit**; use
+`bash scripts/lint.sh --fix` first for auto-fixable formatting, then fix the rest
+by hand. CI enforces the same via `.github/workflows/code-standards.yml` (calls the
+reusable `standards.yml`); enabled languages are `python` and `bash`.
+
+- Configs live in `.code-standards/` — **gitignored, fetched on demand**. If absent,
+  run `curl -fsSL https://raw.githubusercontent.com/maxjiang216/standard-linter/main/scripts/bootstrap.sh | bash` (or `bash scripts/lint.sh` auto-fetches).
+- Python: 80-col, double quotes, Google-style docstrings required on public
+  modules/classes/functions, full type annotations, mypy `strict`.
+- The package dir is `src/wca_org/` (underscore — must be a valid module name for
+  mypy/tooling); imported as `wca_org` via `[tool.setuptools] package-dir = {"" = "src"}`.
+- `requests`/`yaml` imports carry `# type: ignore[import-untyped]` because CI installs
+  only `ruff`+`mypy` (no type stubs); do not remove them.
+
 ## Setup & Common Commands
 
 ### Initial Setup

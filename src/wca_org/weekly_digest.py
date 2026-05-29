@@ -8,7 +8,10 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from .notify import format_weekly_digest, send_email
-from .psych_sheet_notifier import _html_to_plain_text, gather_psych_sheet_results
+from .psych_sheet_notifier import (
+    _html_to_plain_text,
+    gather_psych_sheet_results,
+)
 from .watch_list import load_watch_list_document
 
 
@@ -29,14 +32,18 @@ def run_weekly_digest(
     smtp_password: str | None = None,
     dry_run: bool = False,
 ) -> None:
+    """Build and send (or dry-run) the weekly psych sheet digest email."""
     cfg, events = load_watch_list_document(watch_list_path)
     if not events:
         logging.error(
-            "Watch list is empty or file not found. Use --watch-list path/to/watch_list.yaml",
+            "Watch list is empty or file not found. "
+            "Use --watch-list path/to/watch_list.yaml",
         )
         return
     if not notify_email and not dry_run:
-        logging.error("Use --email to receive notifications, or --dry-run to test.")
+        logging.error(
+            "Use --email to receive notifications, or --dry-run to test."
+        )
         return
 
     tz = timezone or cfg.timezone
@@ -51,6 +58,8 @@ def run_weekly_digest(
         start = datetime(today.year, today.month, today.day)
         end = end_date
     else:
+        assert start_date is not None
+        assert end_date is not None
         start = start_date
         end = end_date
 
@@ -72,12 +81,14 @@ def run_weekly_digest(
         logging.info("Subject: %s", subject)
         out_path = Path("wca_weekly_dry_run.txt")
         out_path.write_text(
-            "\n".join([
-                f"To: {notify_email}",
-                f"Subject: {subject}",
-                "",
-                _html_to_plain_text(html_body),
-            ]),
+            "\n".join(
+                [
+                    f"To: {notify_email}",
+                    f"Subject: {subject}",
+                    "",
+                    _html_to_plain_text(html_body),
+                ]
+            ),
             encoding="utf-8",
         )
         logging.info("Wrote %s", out_path.resolve())

@@ -7,7 +7,8 @@ watch which source lights up first.
 
 Usage:
     uv run python scripts/compare_results_timing.py QuanzhouSummer2026
-    uv run python scripts/compare_results_timing.py QuanzhouSummer2026 --event 333
+    uv run python scripts/compare_results_timing.py \
+        QuanzhouSummer2026 --event 333
 """
 
 from __future__ import annotations
@@ -15,9 +16,9 @@ from __future__ import annotations
 import argparse
 import re
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-import requests
+import requests  # type: ignore[import-untyped]
 
 _UA = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
@@ -42,7 +43,8 @@ def cubing_results(wca_id: str) -> tuple[int, list[str]]:
     r.raise_for_status()
     txt = re.sub(r"<[^>]+>", " ", r.text)
     txt = re.sub(r"\s+", " ", txt)
-    # A result row looks like: "<name> (本地名) <best> <avg> <region> <attempts...>"
+    # A result row reads as name, local name, best, average,
+    # region, then attempt times.
     rows = re.findall(r"[A-Z][a-zA-Z\- ]+ \([^)]+\) +\d", txt)
     sample = [m.strip()[:70] for m in rows[:5]]
     return len(rows), sample
@@ -58,27 +60,29 @@ def wca_results(wca_id: str) -> tuple[int, list[str]]:
     data = r.json()
     rows = data if isinstance(data, list) else []
     sample = [
-        f"{x.get('name')} {x.get('event_id')} best={x.get('best')} avg={x.get('average')}"
+        f"{x.get('name')} {x.get('event_id')} "
+        f"best={x.get('best')} avg={x.get('average')}"
         for x in rows[:5]
     ]
     return len(rows), sample
 
 
 def main() -> int:
+    """Compare cubing.com and WCA result availability for a competition."""
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("wca_id", help="WCA competition id, e.g. QuanzhouSummer2026")
     args = p.parse_args()
 
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
     print(f"=== {args.wca_id} @ {now} ===")
 
     try:
         c_n, c_s = cubing_results(args.wca_id)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         c_n, c_s = -1, [f"ERROR: {e}"]
     try:
         w_n, w_s = wca_results(args.wca_id)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         w_n, w_s = -1, [f"ERROR: {e}"]
 
     print(f"cubing.com : {c_n:>5} result rows")
