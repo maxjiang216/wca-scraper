@@ -6,7 +6,7 @@ import copy
 import json
 import logging
 import time
-from datetime import date
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -46,6 +46,16 @@ def save_records_state(path: Path, state: dict[str, Any]) -> None:
     path.write_text(
         json.dumps(state, indent=0, sort_keys=True), encoding="utf-8"
     )
+
+
+def _parse_iso_date(val: Any) -> date | None:
+    """Parse an ISO ``YYYY-MM-DD`` date, returning None on bad input."""
+    if not val:
+        return None
+    try:
+        return datetime.strptime(str(val).strip(), "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        return None
 
 
 def _safe_pos_int(val: Any) -> int | None:
@@ -214,15 +224,29 @@ def collect_new_live_records(
     cfg: WatchListConfig,
     state: dict[str, Any],
     normalized_rows: list[dict[str, Any]] | None = None,
+    ended_days: int = 10,
+    today: date | None = None,
 ) -> list[dict[str, Any]]:
-    """Return new, unseen WCA Live record rows matching configured rules."""
+    """Return new, unseen WCA Live record rows matching configured rules.
+
+    WCA Live ``recentRecords`` is a count-based rolling window with no date
+    bound, so records can linger for weeks. Unlike late-uploaded REST
+    results, Live records appear in real time, so anything from a comp that
+    ended more than ``ended_days`` ago is stale (we have already had the
+    chance to see it) and is dropped. A cold-start ``seen_live_ids`` (lost
+    cache, first run) bootstraps silently — recording current ids without
+    emailing — so a reset cannot flood the digest with old records.
+    """
     iso2_to_cr = get_iso2_to_continental_record_tag()
     seen = set(state.get("seen_live_ids") or [])
+    bootstrap = len(seen) == 0
+    cutoff = (today or date.today()) - timedelta(days=ended_days)
     rows = (
         normalized_rows
         if normalized_rows is not None
         else _normalized_live_rows_for_configured_events(events)
     )
+    matched_ids: list[str] = []
     out: list[dict[str, Any]] = []
     for norm in rows:
         ec = events.get(norm.get("event_id") or "")
@@ -231,9 +255,24 @@ def collect_new_live_records(
         if not live_row_matches_or(norm, ec=ec, cfg=cfg, iso2_to_cr=iso2_to_cr):
             continue
         lid = norm.get("live_id")
-        if not lid or lid in seen:
+        if not lid:
+            continue
+        end = _parse_iso_date(norm.get("comp_end_date"))
+        if end is not None and end < cutoff:
+            continue
+        matched_ids.append(lid)
+        if bootstrap or lid in seen:
             continue
         out.append(norm)
+
+    if bootstrap:
+        state["seen_live_ids"] = sorted(seen | set(matched_ids))[-8000:]
+        logging.info(
+            "Bootstrap: stored %d WCA Live record id(s); "
+            "no live-email this run",
+            len(matched_ids),
+        )
+        return []
     return out
 
 
@@ -385,7 +424,11 @@ def run_records_check(
 
     norm = _normalized_live_rows_for_configured_events(events)
     new_live = collect_new_live_records(
-        events=events, cfg=cfg, state=work, normalized_rows=norm
+        events=events,
+        cfg=cfg,
+        state=work,
+        normalized_rows=norm,
+        ended_days=ended_days,
     )
     rest_rows = collect_new_competition_result_rows(
         events=events,

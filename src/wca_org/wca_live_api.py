@@ -34,6 +34,7 @@ query RecentRecords {
         name
         competitionEvent {
           event { id name }
+          competition { id name endDate }
         }
       }
     }
@@ -118,6 +119,7 @@ def normalize_live_record(row: dict[str, Any]) -> dict[str, Any] | None:
     rd = res.get("round") or {}
     ev_wrap = rd.get("competitionEvent") or {}
     ev = ev_wrap.get("event") or {}
+    comp = ev_wrap.get("competition") or {}
     wca_id = (person.get("wcaId") or "").strip().upper()
     event_id = (ev.get("id") or "").strip()
     if not wca_id:
@@ -145,6 +147,9 @@ def normalize_live_record(row: dict[str, Any]) -> dict[str, Any] | None:
         "event_id": event_id,
         "event_name": ev.get("name") or event_id,
         "round_name": rd.get("name") or "",
+        "competition_id": comp.get("id") or None,
+        "competition_name": comp.get("name") or None,
+        "comp_end_date": (comp.get("endDate") or "").strip() or None,
     }
 
 
