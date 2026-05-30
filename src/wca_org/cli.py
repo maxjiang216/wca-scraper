@@ -54,6 +54,22 @@ def _add_records_arguments(records_p: argparse.ArgumentParser) -> None:
             "(default: ./records_state.json)"
         ),
     )
+    records_p.add_argument(
+        "--no-cubing-live",
+        dest="cubing_live",
+        action="store_false",
+        help=(
+            "Disable the cubing.com live-results feed (Chinese comps "
+            "publish structured results there days before the WCA "
+            "upload; on by default)"
+        ),
+    )
+    records_p.add_argument(
+        "--cubing-rate-limit",
+        type=float,
+        default=0.4,
+        help="Delay (s) between cubing.com live requests (default: 0.4)",
+    )
     records_p.add_argument("--smtp-host", default="smtp.gmail.com")
     records_p.add_argument("--smtp-port", type=int, default=587)
     records_p.add_argument("--smtp-user", help="SMTP username")
@@ -75,6 +91,8 @@ def _run_records(args: argparse.Namespace) -> None:
         state_path=args.state_file,
         update_state=not args.dry_run,
         ended_days=args.ended_days,
+        cubing_live=args.cubing_live,
+        cubing_rate_limit_s=args.cubing_rate_limit,
     )
     if not new_live and not comp_rows:
         logging.info("No new items matched your rules.")

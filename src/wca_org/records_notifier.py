@@ -10,6 +10,10 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from .cubing_live_api import (
+    discover_recent_cubing_comps,
+    fetch_competition_live_rows,
+)
 from .results_format import mbld_solved_count
 from .watch_list import (
     WatchEventConfig,
@@ -27,17 +31,29 @@ from .wca_live_api import get_recent_records_raw, normalize_live_record
 def load_records_state(path: Path) -> dict[str, Any]:
     """Load deduplication state from disk, returning empty state if absent."""
     if not path.exists():
-        return {"seen_live_ids": [], "seen_rest_result_ids": []}
+        return {
+            "seen_live_ids": [],
+            "seen_rest_result_ids": [],
+            "seen_cubing_result_ids": [],
+        }
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
-        return {"seen_live_ids": [], "seen_rest_result_ids": []}
+        return {
+            "seen_live_ids": [],
+            "seen_rest_result_ids": [],
+            "seen_cubing_result_ids": [],
+        }
     if not isinstance(data, dict):
-        return {"seen_live_ids": [], "seen_rest_result_ids": []}
+        return {
+            "seen_live_ids": [],
+            "seen_rest_result_ids": [],
+            "seen_cubing_result_ids": [],
+        }
     data.setdefault("seen_live_ids", [])
-    sr = data.get("seen_rest_result_ids")
-    if not isinstance(sr, list):
-        data["seen_rest_result_ids"] = []
+    for key in ("seen_rest_result_ids", "seen_cubing_result_ids"):
+        if not isinstance(data.get(key), list):
+            data[key] = []
     return data
 
 
@@ -276,12 +292,12 @@ def collect_new_live_records(
     return out
 
 
-def _seen_rest_result_ids(state: dict[str, Any]) -> set[int]:
-    """Return the set of previously seen competition result ids from state."""
-    ids_list = state.setdefault("seen_rest_result_ids", [])
+def _seen_int_ids(state: dict[str, Any], key: str) -> set[int]:
+    """Return the set of previously seen integer result ids under ``key``."""
+    ids_list = state.setdefault(key, [])
     if not isinstance(ids_list, list):
-        state["seen_rest_result_ids"] = []
-        ids_list = state["seen_rest_result_ids"]
+        state[key] = []
+        ids_list = state[key]
     seen: set[int] = set()
     for x in ids_list:
         try:
@@ -292,11 +308,16 @@ def _seen_rest_result_ids(state: dict[str, Any]) -> set[int]:
 
 
 def _rest_alert_from_row(
-    row: dict[str, Any], *, eid: str, rid_i: int, cid: str
+    row: dict[str, Any],
+    *,
+    eid: str,
+    rid_i: int,
+    cid: str,
+    source: str = "competition",
 ) -> dict[str, Any]:
     """Build an alert dict from a matching competition results row."""
     return {
-        "source": "competition",
+        "source": source,
         "result_id": rid_i,
         "wca_id": (row.get("wca_id") or "").strip().upper(),
         "name": row.get("name") or "",
@@ -323,6 +344,7 @@ def _process_competition_result_rows(
     bootstrap: bool,
     new_ids: list[int],
     alerts: list[dict[str, Any]],
+    source: str = "competition",
 ) -> None:
     """Scan one competition's rows, recording ids and matching alerts."""
     for row in rows:
@@ -344,7 +366,11 @@ def _process_competition_result_rows(
             continue
         if rid_i in seen:
             continue
-        alerts.append(_rest_alert_from_row(row, eid=eid, rid_i=rid_i, cid=cid))
+        alerts.append(
+            _rest_alert_from_row(
+                row, eid=eid, rid_i=rid_i, cid=cid, source=source
+            )
+        )
 
 
 def collect_new_competition_result_rows(
@@ -354,9 +380,16 @@ def collect_new_competition_result_rows(
     state: dict[str, Any],
     ended_days: int = 10,
     delay_s: float = 0.4,
+    skip_competition_ids: set[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Return new, unseen competition result rows matching configured rules."""
-    seen = _seen_rest_result_ids(state)
+    """Return new, unseen competition result rows matching configured rules.
+
+    ``skip_competition_ids`` are WCA competition ids already covered by the
+    cubing.com live feed this run; they are excluded so a Chinese comp's
+    results are alerted from a single source (cubing leads WCA by days).
+    """
+    seen = _seen_int_ids(state, "seen_rest_result_ids")
+    skip = skip_competition_ids or set()
 
     today_d = date.today()
     ended = get_competitions_ended_within_days(
@@ -366,7 +399,7 @@ def collect_new_competition_result_rows(
             "  Past-comps page %d: %d match(es)", p, n
         ),
     )
-    comp_ids = [c["id"] for c in ended if c.get("id")]
+    comp_ids = [c["id"] for c in ended if c.get("id") and c["id"] not in skip]
     logging.info(
         "%d competition(s) in last %d day(s) for results scan",
         len(comp_ids),
@@ -410,6 +443,68 @@ def collect_new_competition_result_rows(
     return alerts
 
 
+def collect_new_cubing_result_rows(
+    *,
+    events: dict[str, WatchEventConfig],
+    cfg: WatchListConfig,
+    state: dict[str, Any],
+    comps: list[dict[str, Any]],
+    rate_limit_delay_s: float = 0.4,
+) -> list[dict[str, Any]]:
+    """Return new, unseen cubing.com live result rows matching the rules.
+
+    ``comps`` come from
+    :func:`wca_org.cubing_live_api.discover_recent_cubing_comps`. Result ids
+    live in their own ``seen_cubing_result_ids`` namespace (cubing ids are
+    unrelated to WCA result ids), with the same cold-start bootstrap as the
+    REST path.
+    """
+    seen = _seen_int_ids(state, "seen_cubing_result_ids")
+    bootstrap = len(seen) == 0
+    alerts: list[dict[str, Any]] = []
+    new_ids: list[int] = []
+
+    for comp in comps:
+        alias = comp.get("alias") or ""
+        cid = comp.get("competition_id") or f"cubing:{alias}"
+        try:
+            rows = fetch_competition_live_rows(
+                alias,
+                competition_id=cid,
+                rate_limit_delay_s=rate_limit_delay_s,
+            )
+        except Exception as e:  # network failure; skip this comp
+            logging.warning("cubing live %s: %s", alias, e)
+            continue
+        logging.info(
+            "  cubing live %s: %d finished-round row(s)", alias, len(rows)
+        )
+        _process_competition_result_rows(
+            rows,
+            cid=cid,
+            events=events,
+            cfg=cfg,
+            seen=seen,
+            bootstrap=bootstrap,
+            new_ids=new_ids,
+            alerts=alerts,
+            source="cubing_live",
+        )
+
+    merged = seen | set(new_ids)
+    state["seen_cubing_result_ids"] = sorted(merged)[-120_000:]
+
+    if bootstrap:
+        logging.info(
+            "Bootstrap: stored %d cubing live result id(s); "
+            "no cubing-email this run",
+            len(merged),
+        )
+        return []
+
+    return alerts
+
+
 def run_records_check(
     *,
     events: dict[str, WatchEventConfig],
@@ -417,8 +512,16 @@ def run_records_check(
     state_path: Path,
     update_state: bool = True,
     ended_days: int = 10,
+    cubing_live: bool = True,
+    cubing_rate_limit_s: float = 0.4,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Run the records check, returning new live and competition rows."""
+    """Run the records check, returning new live and competition rows.
+
+    Competition rows merge two sources: cubing.com's live feed (Chinese
+    comps, available days early) and the WCA REST ``/results`` scan. Comps
+    covered by cubing this run are skipped in the WCA scan so each result is
+    alerted once.
+    """
     state_disk = load_records_state(state_path)
     work = copy.deepcopy(state_disk) if not update_state else state_disk
 
@@ -430,11 +533,35 @@ def run_records_check(
         normalized_rows=norm,
         ended_days=ended_days,
     )
+
+    cubing_rows: list[dict[str, Any]] = []
+    cubing_covered: set[str] = set()
+    if cubing_live:
+        window_start = date.today() - timedelta(days=ended_days)
+        comps = discover_recent_cubing_comps(
+            window_start=window_start,
+            window_end=date.today(),
+            rate_limit_delay_s=cubing_rate_limit_s,
+        )
+        cubing_covered = {
+            c["wca_competition_id"]
+            for c in comps
+            if c.get("wca_competition_id")
+        }
+        cubing_rows = collect_new_cubing_result_rows(
+            events=events,
+            cfg=cfg,
+            state=work,
+            comps=comps,
+            rate_limit_delay_s=cubing_rate_limit_s,
+        )
+
     rest_rows = collect_new_competition_result_rows(
         events=events,
         cfg=cfg,
         state=work,
         ended_days=ended_days,
+        skip_competition_ids=cubing_covered,
     )
 
     if update_state:
@@ -446,4 +573,4 @@ def run_records_check(
         work["seen_live_ids"] = sorted(seen_set)[-8000:]
         save_records_state(state_path, work)
 
-    return new_live, rest_rows
+    return new_live, cubing_rows + rest_rows
