@@ -21,11 +21,15 @@ from .watch_list import (
     continental_tags_for_event,
 )
 from .wca_api import (
+    fetch_person_bundle,
     get_competition_results,
     get_competitions_ended_within_days,
     get_iso2_to_continental_record_tag,
 )
 from .wca_live_api import get_recent_records_raw, normalize_live_record
+
+# wca_id -> personal_records dict from GET /persons/{id} (empty on failure).
+_PERSON_RECORDS_CACHE: dict[str, dict[str, Any]] = {}
 
 
 def load_records_state(path: Path) -> dict[str, Any]:
@@ -86,6 +90,176 @@ def _allowed_cr_tags(ec: WatchEventConfig, cfg: WatchListConfig) -> set[str]:
     return continental_tags_for_event(ec, cfg)
 
 
+def _person_personal_records(wca_id: str) -> dict[str, Any]:
+    """Return ``personal_records`` for ``wca_id``, cached per process."""
+    wid = (wca_id or "").strip().upper()
+    if not wid:
+        return {}
+    if wid in _PERSON_RECORDS_CACHE:
+        return _PERSON_RECORDS_CACHE[wid]
+    try:
+        bundle = fetch_person_bundle(wid)
+        pr = bundle.get("personal_records") or {}
+        if not isinstance(pr, dict):
+            pr = {}
+    except Exception as e:
+        logging.warning("personal_records %s: %s", wid, e)
+        pr = {}
+    _PERSON_RECORDS_CACHE[wid] = pr
+    return pr
+
+
+def _personal_best_cs(wca_id: str, event_id: str, typ: str) -> int | None:
+    """Published PB in centiseconds for ``event_id`` / ``typ``, or None."""
+    pr = _person_personal_records(wca_id)
+    ev = pr.get(event_id) or {}
+    if not isinstance(ev, dict):
+        return None
+    side = ev.get(typ) or {}
+    if not isinstance(side, dict):
+        return None
+    return _safe_pos_int(side.get("best"))
+
+
+def _is_pb(value: int | None, prior: int | None, *, published: bool) -> bool:
+    """Whether ``value`` is a personal best vs published ``prior``.
+
+    Live / cubing results are not in ranks yet → strict ``<``.
+    Published REST results already update ranks when they *are* the new
+    PB → ``<=``. No prior PB counts as a PB. Invalid times do not.
+    """
+    if value is None:
+        return False
+    if prior is None:
+        return True
+    if published:
+        return value <= prior
+    return value < prior
+
+
+def _add_record_tag_sides(
+    sides: set[str],
+    *,
+    rs: str,
+    ra: str,
+    allowed: set[str],
+) -> None:
+    """Add single/average sides for WR or allowed continental tags."""
+    if rs == "WR" or (allowed and rs in allowed):
+        sides.add("single")
+    if ra == "WR" or (allowed and ra in allowed):
+        sides.add("average")
+
+
+def _add_mbf_sup_sides(
+    sides: set[str],
+    *,
+    best: int | None,
+    avg: int | None,
+    sup_points: int,
+) -> None:
+    """Add sides where MBLD solved count meets ``sup_points``."""
+    for typ, raw in (("single", best), ("average", avg)):
+        if raw is None:
+            continue
+        sc = mbld_solved_count(int(raw))
+        if sc is not None and sc >= sup_points:
+            sides.add(typ)
+
+
+def _add_sub_time_sides(
+    sides: set[str],
+    *,
+    best: int | None,
+    avg: int | None,
+    ec: WatchEventConfig,
+) -> None:
+    """Add sides under configured ``sub_single`` / ``sub_average`` caps."""
+    if (
+        ec.sub_single_cs is not None
+        and best is not None
+        and best < ec.sub_single_cs
+    ):
+        sides.add("single")
+    if (
+        ec.sub_average_cs is not None
+        and avg is not None
+        and avg < ec.sub_average_cs
+    ):
+        sides.add("average")
+
+
+def _rest_matching_sides(
+    row: dict[str, Any],
+    *,
+    ec: WatchEventConfig,
+    cfg: WatchListConfig,
+) -> set[str]:
+    """Return which of ``single`` / ``average`` triggered the OR rules."""
+    sides: set[str] = set()
+    eid = row.get("event_id") or ""
+    rs = (row.get("regional_single_record") or "").strip().upper()
+    ra = (row.get("regional_average_record") or "").strip().upper()
+    _add_record_tag_sides(
+        sides,
+        rs=rs,
+        ra=ra,
+        allowed=_allowed_cr_tags(ec, cfg),
+    )
+
+    best = _safe_pos_int(row.get("best"))
+    avg = _safe_pos_int(row.get("average"))
+
+    if eid == "333mbf" and ec.mbf_sup_points is not None:
+        _add_mbf_sup_sides(
+            sides, best=best, avg=avg, sup_points=ec.mbf_sup_points
+        )
+        return sides
+
+    if eid != "333mbf":
+        _add_sub_time_sides(sides, best=best, avg=avg, ec=ec)
+
+    return sides
+
+
+def _rest_row_is_pb(
+    row: dict[str, Any],
+    *,
+    ec: WatchEventConfig,
+    cfg: WatchListConfig,
+    published: bool,
+) -> bool:
+    """True if any OR-matching side on the row is a personal best."""
+    wca_id = (row.get("wca_id") or "").strip().upper()
+    if not wca_id:
+        return False
+    eid = row.get("event_id") or ""
+    sides = _rest_matching_sides(row, ec=ec, cfg=cfg)
+    if not sides:
+        return False
+    for typ in sides:
+        key = "best" if typ == "single" else "average"
+        val = _safe_pos_int(row.get(key))
+        prior = _personal_best_cs(wca_id, eid, typ)
+        if _is_pb(val, prior, published=published):
+            return True
+    return False
+
+
+def _live_row_is_pb(norm: dict[str, Any]) -> bool:
+    """True if the live row's typed result is a personal best."""
+    wca_id = (norm.get("wca_id") or "").strip().upper()
+    if not wca_id:
+        return False
+    eid = norm.get("event_id") or ""
+    typ = (norm.get("type") or "single").lower()
+    if typ not in ("single", "average"):
+        typ = "single"
+    val = _live_result_centiseconds(norm, typ)
+    prior = _personal_best_cs(wca_id, eid, typ)
+    return _is_pb(val, prior, published=False)
+
+
 def _rest_row_matches_or(
     row: dict[str, Any],
     *,
@@ -97,43 +271,7 @@ def _rest_row_matches_or(
     Checks WR, configured continental tags on the row, sub time
     (non-mbf), and MBLD sup points (333mbf).
     """
-    eid = row.get("event_id") or ""
-    rs = (row.get("regional_single_record") or "").strip().upper()
-    ra = (row.get("regional_average_record") or "").strip().upper()
-    if rs == "WR" or ra == "WR":
-        return True
-
-    allowed = _allowed_cr_tags(ec, cfg)
-    if allowed and (rs in allowed or ra in allowed):
-        return True
-
-    best = _safe_pos_int(row.get("best"))
-    avg = _safe_pos_int(row.get("average"))
-
-    if eid == "333mbf" and ec.mbf_sup_points is not None:
-        for raw in (best, avg):
-            if raw is None:
-                continue
-            sc = mbld_solved_count(int(raw))
-            if sc is not None and sc >= ec.mbf_sup_points:
-                return True
-        return False
-
-    if eid != "333mbf":
-        if (
-            ec.sub_single_cs is not None
-            and best is not None
-            and best < ec.sub_single_cs
-        ):
-            return True
-        if (
-            ec.sub_average_cs is not None
-            and avg is not None
-            and avg < ec.sub_average_cs
-        ):
-            return True
-
-    return False
+    return bool(_rest_matching_sides(row, ec=ec, cfg=cfg))
 
 
 def _live_result_centiseconds(norm: dict[str, Any], typ: str) -> int | None:
@@ -279,6 +417,8 @@ def collect_new_live_records(
         matched_ids.append(lid)
         if bootstrap or lid in seen:
             continue
+        if not _live_row_is_pb(norm):
+            continue
         out.append(norm)
 
     if bootstrap:
@@ -365,6 +505,9 @@ def _process_competition_result_rows(
         if bootstrap:
             continue
         if rid_i in seen:
+            continue
+        published = source != "cubing_live"
+        if not _rest_row_is_pb(row, ec=ec, cfg=cfg, published=published):
             continue
         alerts.append(
             _rest_alert_from_row(
